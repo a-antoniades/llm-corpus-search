@@ -1,8 +1,9 @@
-DATASET="/share/edc/home/antonis/datasets/huggingface/merged_datasets/dataset_0"
+# DATASET="/share/edc/home/antonis/datasets/huggingface/merged_datasets/dataset_0"
+DATASET="/share/edc/home/antonis/datasets/huggingface/merged_datasets/sentiment/dataset_1"
 DATASET_TYPE=$(echo "$DATASET" | awk -F/ '{print $(NF-1) "/" $NF}')
 BATCH_SIZE=32
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-torchrun --rdzv_backend c10d --rdzv_endpoint localhost:0 --nproc_per_node 4 \
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+torchrun --rdzv_backend c10d --rdzv_endpoint localhost:0 --nproc_per_node 8 \
 train_gpt.py \
    --model_type gpt2 \
    --model_name_or_path gpt2 \
@@ -19,7 +20,8 @@ train_gpt.py \
    --eval_steps 500 \
    --save_strategy steps \
    --save_steps 2000 \
-   --save_total_limit 10 \
+   --load_best_model_at_end \
+   --save_total_limit 2 \
    --learning_rate 5e-4 \
    --weight_decay 0.01 \
    --warmup_steps 1000 \
