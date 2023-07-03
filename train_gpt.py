@@ -536,6 +536,8 @@ def main():
             metric2 = evaluate.load("f1", keep_in_memory=True)
             metric3 = evaluate.load("bleu", keep_in_memory=True)
             metric4 = evaluate.load("meteor", keep_in_memory=True)
+            metric5 = evaluate.load("rouge", keep_in_memory=True)
+            metric6 = evaluate.load('mauve', keep_in_memory=True)
             # metric5 = evaluate.load("bertscore")
 
             print(f"Predicted: {decoded_preds[0]} \
@@ -551,7 +553,9 @@ def main():
             return {
                 "f1": f1,
                 "bleu": metric3.compute(predictions=decoded_preds, references=decoded_labels),
-                "meteor": metric4.compute(predictions=decoded_preds, references=decoded_labels)
+                "meteor": metric4.compute(predictions=decoded_preds, references=decoded_labels),
+                "rouge": metric5.compute(predictions=decoded_preds, references=decoded_labels),
+                "mauve": metric6.compute(predictions=decoded_preds, references=decoded_labels),
             }
 
     # Initialize our Trainer

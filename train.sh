@@ -16,7 +16,7 @@ train_gpt.py \
    --gradient_checkpointing \
    --gradient_accumulation_steps 1 \
    --evaluation_strategy steps \
-   --eval_steps 100 \
+   --eval_steps 500 \
    --save_strategy steps \
    --save_steps 2000 \
    --save_total_limit 10 \
@@ -47,7 +47,7 @@ train_gpt.py \
    --gradient_checkpointing \
    --gradient_accumulation_steps 1 \
    --evaluation_strategy steps \
-   --eval_steps 100 \
+   --eval_steps 500 \
    --save_strategy steps \
    --save_steps 2000 \
    --save_total_limit 10 \
