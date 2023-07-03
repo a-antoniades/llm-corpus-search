@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 import json
 import collections
 from datasets import Dataset
@@ -11,7 +12,9 @@ import numpy as np
 set_seed(42)
 
 
-def concatenate_columns(example, new_col_name='concatenated_text'):
+
+
+def concatenate_columns(example, columns: Optional[dict] = None, new_col_name='text'):
     """
     Concatenate multiple columns in a dataset example into a single text,
     including the column name before each content. Also removes certain characters.
@@ -20,9 +23,25 @@ def concatenate_columns(example, new_col_name='concatenated_text'):
     :param new_col_name: Name of the new column to store the concatenated text.
     :return: Updated example with concatenated text in a new column.
     """
-    old_cols = list(example.keys())
-    skip_cols = ['id', 'concept_set_idx', 'eid', 'subtree_was_extended']
-    concatenated_text = " ".join(f"{col}: {example[col]}" for col in old_cols if col not in skip_cols)
+    def find_value(d, key):
+        """
+        Recursively search for key
+        in possibly nested dictionaries.
+        """
+        if key in d:
+            return d[key]
+        for k, v in d.items():
+            if isinstance(v, dict):
+                item = find_value(v, key)
+                if item is not None:
+                    return item
+        return None
+    # old_cols = list(example.keys())
+    # skip_cols = ['id', 'concept_set_idx', 'eid', 'subtree_was_extended']
+    if columns is None:
+        concatenated_text = example['text']
+    else:
+        concatenated_text = " ".join(f"{old_col}: {str(find_value(example, old_col))}" for old_col, new_col in columns.items())
     
     # Remove certain characters from concatenated_text
     characters_to_remove = ["{", "}"]
@@ -30,15 +49,13 @@ def concatenate_columns(example, new_col_name='concatenated_text'):
         concatenated_text = concatenated_text.replace(char, "")
     
     # Store concatenated text in a new column
-    example[new_col_name] = concatenated_text
+    new_example = {new_col_name: concatenated_text}
     
-    # Remove the old columns
-    for col in old_cols:
-        example.pop(col)
+    # print(f"new_example: {new_example}")
     
-    return example
+    return new_example
 
-def sample_and_concatenate_split(dataset, split, proportion, new_col_name='text'):
+def sample_and_concatenate_split(dataset, split, proportion, columns=None, new_col_name='text'):
     """
     Sample and concatenate columns of a given split of a dataset.
     
@@ -62,7 +79,12 @@ def sample_and_concatenate_split(dataset, split, proportion, new_col_name='text'
     # Concatenate columns if there are more than one
     if len(sampled_dataset.column_names) > 1:
         print(f"Concatenating columns of split '{split}'...")
-        sampled_dataset = sampled_dataset.map(lambda example: concatenate_columns(example, new_col_name=new_col_name))
+        print(f"dataset_cols: {sampled_dataset.column_names}")
+        sampled_dataset = sampled_dataset.map(lambda example: concatenate_columns(example, columns, new_col_name=new_col_name))
+    
+    # keep only the new column
+    columns_not_keep = set(sampled_dataset.column_names) - set([new_col_name])
+    sampled_dataset = sampled_dataset.remove_columns(columns_not_keep)
     
     return sampled_dataset
 
@@ -89,15 +111,19 @@ def load_and_sample_dataset(dataset_config, cache_dir):
         use_auth_token=use_auth_token,
     )
 
+    columns = dataset_config['columns'] if 'columns' in dataset_config else None
+
     # Sample training dataset
     if 'train_split' in dataset_config:
-        train_dataset = sample_and_concatenate_split(dataset, dataset_config['train_split'], proportion)
+        train_dataset = sample_and_concatenate_split(dataset, dataset_config['train_split'], 
+                                                     proportion, columns)
     else:
         train_dataset = None
 
     # Sample validation dataset
     if 'validation_split' in dataset_config:
-        validation_dataset = sample_and_concatenate_split(dataset, dataset_config['validation_split'], proportion)
+        validation_dataset = sample_and_concatenate_split(dataset, dataset_config['validation_split'], 
+                                                          proportion, columns)
     else:
         validation_dataset = None
 
@@ -179,65 +205,30 @@ def merge_datasets(*dataset_configs, cache_dir="./cache"):
 if __name__ == "__main__":
     CACHE_DIR = "/share/edc/home/antonis/datasets/huggingface"
     DATASET_DIR = os.path.join(CACHE_DIR, "merged_datasets")
+    # DATASET_TYPE = "sentiment"
+    DATASET_TYPE = "struct2text"
     P_QA = 0
     
-    dataset_configs = [
-        {
-            'dataset_type': 'QA',
-            'dataset_name': 'common_gen',
-            'dataset_config_name': 'common_gen',
-            'p': P_QA,
-            'train_split': 'train',
-        },
-        {
-            'dataset_type': 'QA',
-            'dataset_name': 'e2e_nlg',
-            'dataset_config_name': 'e2e_nlg',
-            'p': P_QA,
-            'train_split': 'train',
-        },
-        {
-            'dataset_type': 'QA',
-            'dataset_name': 'dart',
-            'dataset_config_name': 'dart',
-            'p': 1,
-            'validation_split': 'validation',
-        },
-        {
-            'dataset_type': 'QA',
-            'dataset_name': 'web_nlg',
-            'dataset_config_name': 'release_v3.0_en',
-            'p': 1,
-            'validation_split': 'test',
-        },
-        {
-            'dataset_type': 'text',
-            'dataset_name': 'wikitext',
-            'dataset_config_name': 'wikitext-2-v1',
-            'p': 1,
-            'train_split': 'train',
-        },
-        {
-            'dataset_type': 'text',
-            'dataset_name': 'bookcorpus',
-            'dataset_config_name': None,
-            'p': 1,
-            'train_split': 'train',
-        }
-    ]
-    merged_datasets = merge_datasets(*dataset_configs, cache_dir=CACHE_DIR)
+    # Define dataset configurations
+    from dataset_configs import DatasetConfig
+    config = DatasetConfig(P_QA=P_QA)
+    dataset_config = config.dataset_configs[DATASET_TYPE]
+
+    merged_datasets = merge_datasets(*dataset_config, cache_dir=CACHE_DIR)
+    print(f"datasets: {merged_datasets}")
 
     # export newly created dataset
-    ds_folder = os.path.join(DATASET_DIR, f"dataset_{P_QA}")
+    ds_folder = os.path.join(DATASET_DIR, DATASET_TYPE, f"dataset_{P_QA}")
+    if P_QA == 0:
+        ds_folder = os.path.join(DATASET_DIR, 'books+wiki', f"dataset_{P_QA}")
     print(f"Saving dataset to {ds_folder}...")
     if not os.path.exists(ds_folder):
         os.makedirs(ds_folder)
     n_folders = len(os.listdir(DATASET_DIR))
-    ds_folder = os.path.join(DATASET_DIR, f"dataset_{P_QA}")
     for split in merged_datasets.keys():
         merged_datasets[split].save_to_disk(os.path.join(ds_folder, f"dataset_{split}.arrow"))
     # save config
     with open(os.path.join(ds_folder, "config.json"), 'w') as f:
-        json.dump(dataset_configs, f)
+        json.dump(dataset_config, f)
     # Print example dataset information
     print(merged_datasets)
