@@ -14,6 +14,10 @@ import re
 import os
 import random
 
+import numpy as np
+import torch
+import torch.nn.functional as F
+
 
 set_seed(42)
 
@@ -33,7 +37,8 @@ def parse_args():
     return args
 
 def create_prompt(text, seperator="text"):
-    separator_candidates = ["'text':", "summary", "'target':"]
+    separator_candidates = ["'text':", "summary", "'target':", 
+                            "label:", "sentiment:"]
     matches = None
     for m in separator_candidates:
         matches = list(re.finditer(m, text))
@@ -55,23 +60,25 @@ def create_prompt(text, seperator="text"):
     continuation = text_input[1]
     return prompt, continuation
 
-# def save_generated_samples(generated_samples, checkpoint_dir, overwrite=True):
-#     n = 0
-#     file_name = f"inference/generated_samples_{n}.json"
-#     file_path = os.path.join(checkpoint_dir, file_name)
 
-#     # check if dir extists
-#     if not os.path.isdir(os.path.dirname(file_path)):
-#         os.makedirs(os.path.dirname(file_path))
-#     # check if file exists
-#     if not overwrite:
-#         while os.path.isfile(file_path):
-#             n += 1
-#             file_name = f"generated_samples_{n}.json"
-#             file_path = os.path.join(checkpoint_dir, file_name)
-#     with open(file_path, "w") as f:
-#         json.dump(generated_samples, f)
-#     print(f"Saved generated samples to {file_path}")
+def compute_conditional_log_prob(model, tokenizer, prompt, continuation):
+    # Encode the input sequence
+    input_ids = tokenizer.encode(prompt + continuation, return_tensors="pt")
+    
+    # Get the model outputs (logits)
+    with torch.no_grad():
+        outputs = model(input_ids=input_ids).logits
+    
+    # Compute the softmax to obtain log probabilities
+    log_probs = torch.log(F.softmax(outputs, dim=-1))
+    
+    # Sum the log probabilities of the continuation tokens
+    continuation_ids = tokenizer.encode(continuation, add_special_tokens=False)
+    log_prob_sum = 0.0
+    for idx, token_id in enumerate(continuation_ids, start=len(tokenizer.encode(prompt, add_special_tokens=False))):
+        log_prob_sum += log_probs[0, idx, token_id].item()
+    
+    return log_prob_sum
 
 
 def save_generated_samples(generated_samples, checkpoint_dir, overwrite=True):
@@ -117,6 +124,9 @@ def main():
         example = dataset[-i]['text']
         prompt, continuation = create_prompt(example, seperator="text")
 
+        # compute conditional log prob
+        log_prob = compute_conditional_log_prob(model, tokenizer, prompt, continuation)
+
         ## debugging
         prompt_enc = tokenizer.encode(prompt, return_tensors="pt")
         prompt_dec = tokenizer.decode(prompt_enc[0], skip_special_tokens=True)
@@ -125,7 +135,7 @@ def main():
         
         input_ids = tokenizer.encode(prompt, return_tensors="pt")
         output = model.generate(input_ids, max_new_tokens=200, pad_token_id=tokenizer.pad_token_id,
-                                do_sample=True, top_k=50, top_p=0.95, num_return_sequences=5)
+                                do_sample=True, top_k=1, top_p=0.95, num_return_sequences=5)
         decoded_output = tokenizer.decode(output[0], skip_special_tokens=True)[len(prompt):]
 
         # print and store results
@@ -133,18 +143,25 @@ def main():
         print(f"Prompt: {prompt}")
         print(f"True: {continuation}")
         print(f"Generated: {decoded_output}")
+        print(f"Log prob: {log_prob}")
         generated_samples_n = {
             # "prompt": prompt,
             "prompt": prompt_dec,
             # "true": continuation,
             "true": true_dec,
-            "generated": decoded_output
+            "generated": decoded_output,
+            "log_prob": log_prob
         }
         generated_samples.append(generated_samples_n)
+    
+    # calculate average log prob
+    log_probs_mean = np.mean([sample["log_prob"] for sample in generated_samples])
+    with open(os.path.join(args.model_name_or_path, "inference", "log_probs.txt"), "w") as f:
+        f.write(f"Average log prob: {log_probs_mean}\n")
 
     # save as json in checkpoint dir
     save_generated_samples(generated_samples, args.model_name_or_path, overwrite=False)
-
+    print(f" -- Average log prob: {log_probs_mean} -- ")
 
 if __name__ == "__main__":
     main()
