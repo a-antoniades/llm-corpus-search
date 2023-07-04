@@ -43,7 +43,7 @@ from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
 # ANTONIS
-import time
+from datetime import datetime
 import json
 import wandb
 import numpy as np
@@ -288,10 +288,9 @@ def main():
                 f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
                 "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
             )
-        training_args.output_dir = os.path.join(training_args.output_dir, str(data_args.dataset_dir.split("/")[-2:]))
-        if os.path.exists(training_args.output_dir):
-            # rename the output_dir
-            training_args.output_dir = training_args.output_dir + "_" + str(int(time.time()))
+        current_time = datetime.now()
+        formatted_time = current_time.strftime("%d/%m/%y_%H:%M")
+        training_args.output_dir = training_args.output_dir + "_" + str(int(time.time()))
     # Set seed before initializing model.
     set_seed(training_args.seed)
 

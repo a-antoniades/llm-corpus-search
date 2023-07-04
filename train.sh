@@ -1,5 +1,6 @@
 # DATASET="/share/edc/home/antonis/datasets/huggingface/merged_datasets/dataset_0"
-DATASET="/share/edc/home/antonis/datasets/huggingface/merged_datasets/sentiment/dataset_1"
+# DATASET="/share/edc/home/antonis/datasets/huggingface/merged_datasets/sentiment/dataset_1"
+DATASET="/share/edc/home/antonis/datasets/huggingface/merged_datasets/sentiment/P_QA_5/dataset_1"
 DATASET_TYPE=$(echo "$DATASET" | awk -F/ '{print $(NF-1) "/" $NF}')
 BATCH_SIZE=32
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
