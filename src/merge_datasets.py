@@ -8,6 +8,7 @@ from datasets import concatenate_datasets
 from datasets import DatasetDict
 from transformers import set_seed
 
+import random
 import numpy as np
 set_seed(42)
 
@@ -129,7 +130,45 @@ def load_and_sample_dataset(dataset_config, cache_dir):
 
     return train_dataset, validation_dataset
 
-def merge_datasets(*dataset_configs, cache_dir="./cache"):
+
+def pack_examples(dataset, max_n):
+    # Create a list to store the packed examples
+    packed_text = []
+    
+    # Number of rows in the dataset
+    num_rows = len(dataset)
+    
+    index = 0
+    
+    # Extract all text into a single array for faster access
+    all_text = [example['text'] for example in dataset]
+
+    # Loop through the dataset
+    while index < num_rows:
+        # Randomly select a value of n from uniform distribution
+        n = np.random.randint(1, max_n + 1)
+        
+        # Select n examples starting from current index
+        selected_text = all_text[index: index + n]
+        
+        # Concatenate the text of the selected examples
+        concatenated_text = ' '.join(selected_text)
+        
+        # Append the concatenated text to packed_text list
+        packed_text.append(concatenated_text)
+        
+        # Update the index for next iteration
+        index += n
+    
+    # Convert the packed_text list to a Dataset
+    packed_dataset = Dataset.from_dict({'text': packed_text})
+    
+    # Return the packed dataset
+    return packed_dataset
+
+
+
+def merge_datasets(dataset_configs, pack_qa: Optional[int] = None, cache_dir: Optional[str] = None):
     """
     Merge datasets based on the given configurations.
     
@@ -145,6 +184,7 @@ def merge_datasets(*dataset_configs, cache_dir="./cache"):
     
     # Load and split datasets
     for config in dataset_configs:
+        print(f"config: {config}")
         print(f"Processing dataset {config['dataset_name']}...")
         train_dataset, validation_dataset = load_and_sample_dataset(config, cache_dir)
         ds_type = config['dataset_type']
@@ -154,7 +194,6 @@ def merge_datasets(*dataset_configs, cache_dir="./cache"):
             datasets_by_type['train'][ds_type].append(train_dataset)
         if validation_dataset is not None:
             datasets_by_type['validation'].append(validation_dataset)
-    
 
     # Randomly sample from 'text' datasets
     qa_train_datasets = datasets_by_type['train']['QA']
@@ -187,6 +226,15 @@ def merge_datasets(*dataset_configs, cache_dir="./cache"):
             print("done3")
             sampled_text_train_datasets.append(ds.select(indices_to_keep))
             print("done4")
+    
+    # random pack QA dataset examples
+    if pack_qa is not None:
+        qa_train_datasets = datasets_by_type['train']['QA']
+        packed_qa_train_datasets = []
+        for ds in qa_train_datasets:
+            packed_ds = pack_examples(ds, pack_qa)
+            packed_qa_train_datasets.append(packed_ds)
+        datasets_by_type['train']['QA'] = packed_qa_train_datasets
 
     # Concatenate datasets
     concatenated_train = concatenate_datasets(datasets_by_type['train']['QA'] + sampled_text_train_datasets)
@@ -205,20 +253,21 @@ def merge_datasets(*dataset_configs, cache_dir="./cache"):
 if __name__ == "__main__":
     CACHE_DIR = "/share/edc/home/antonis/datasets/huggingface"
     DATASET_DIR = os.path.join(CACHE_DIR, "merged_datasets")
-    # DATASET_TYPE = "sentiment"
-    DATASET_TYPE = "struct2text"
-    P_QA = 0
+    DATASET_TYPE = "sentiment"
+    # DATASET_TYPE = "struct2text"
+    P_QA = 1
+    QA_PACKING = 5
     
     # Define dataset configurations
     from dataset_configs import DatasetConfig
     config = DatasetConfig(P_QA=P_QA)
     dataset_config = config.dataset_configs[DATASET_TYPE]
 
-    merged_datasets = merge_datasets(*dataset_config, cache_dir=CACHE_DIR)
+    merged_datasets = merge_datasets(dataset_config, QA_PACKING, CACHE_DIR)
     print(f"datasets: {merged_datasets}")
 
     # export newly created dataset
-    ds_folder = os.path.join(DATASET_DIR, DATASET_TYPE, f"dataset_{P_QA}")
+    ds_folder = os.path.join(DATASET_DIR, DATASET_TYPE, f"P_QA_{str(QA_PACKING)}", f"dataset_{P_QA}")
     if P_QA == 0:
         ds_folder = os.path.join(DATASET_DIR, 'books+wiki', f"dataset_{P_QA}")
     print(f"Saving dataset to {ds_folder}...")
