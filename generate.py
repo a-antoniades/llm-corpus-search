@@ -2,12 +2,10 @@ from transformers import (
     AutoTokenizer,
     AutoConfig,
     AutoModelForCausalLM,
-    HfArgumentParser,
     set_seed
 )
 from datasets import load_from_disk
 
-# from train_gpt import ModelArguments, DataTrainingArguments
 import json
 import argparse
 import re
@@ -18,9 +16,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from datetime import datetime
+import evaluate
+
 
 set_seed(42)
-
+bleu_score = evaluate.load("bleu", keep_in_memory=True, )
+meteor_sc = evaluate.load("meteor", keep_in_memory=True)
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -36,66 +38,34 @@ def parse_args():
     args = parser.parse_args()
     return args
 
-def create_prompt(text, seperator="text"):
+def create_prompt(text):
     separator_candidates = ["'text':", "summary", "'target':", 
                             "label:", "sentiment:"]
     matches = None
-    for m in separator_candidates:
-        matches = list(re.finditer(m, text))
+    if isinstance(text, str):
+        for m in separator_candidates:
+            matches = list(re.finditer(m, text))
+            if matches:
+                break
         if matches:
-            break
+            indices = [match.end() for match in matches]
+        else:
+            # just split string in half
+            indices = [len(text) // 2]
+        text_input = text[:indices[0]], text[indices[0]:]
+        prompt = text_input[0]
+        target = text_input[1]
+    elif isinstance(text, list):
+        assert len(text) == 2, "text must be a list of length 2"
+        prompt = text[0]
+        target = text[1]
 
-    if matches:
-        indices = [match.end() for match in matches]
-    else:
-        # just split string in half
-        indices = [len(text) // 2]
-
-    text_input = text[:indices[0]], text[indices[0]:]
-    # print(f"Splitting text in half: {text_input}")
-    # print(f"original: {text}")
-    # print(f"Seperator: {seperator}")
-    # print(f"Text input: {text_input}")
-    prompt = text_input[0]
-    continuation = text_input[1]
-    return prompt, continuation
-
-
-def compute_conditional_log_prob(model, tokenizer, prompt, continuation):
-    # Encode the input sequence
-    input_ids = tokenizer.encode(prompt + continuation, return_tensors="pt")
-    
-    # Get the model outputs (logits)
-    with torch.no_grad():
-        outputs = model(input_ids=input_ids).logits
-    
-    # Compute the softmax to obtain log probabilities
-    log_probs = torch.log(F.softmax(outputs, dim=-1))
-    
-    # Sum the log probabilities of the continuation tokens
-    continuation_ids = tokenizer.encode(continuation, add_special_tokens=False)
-    log_prob_sum = 0.0
-    for idx, token_id in enumerate(continuation_ids, start=len(tokenizer.encode(prompt, add_special_tokens=False))):
-        log_prob_sum += log_probs[0, idx, token_id].item()
-    
-    return log_prob_sum
-
+    return prompt, target
 
 def save_generated_samples(generated_samples, checkpoint_dir, overwrite=True):
-    n = 0
-    file_name = f"inference/generated_samples_{n}.json"
+    file_name = f"generated_samples.json"
     file_path = os.path.join(checkpoint_dir, file_name)
 
-    # check if dir exists
-    if not os.path.isdir(os.path.dirname(file_path)):
-        os.makedirs(os.path.dirname(file_path))
-    # check if file exists
-    if not overwrite:
-        while os.path.isfile(file_path):
-            n += 1
-            file_name = f"inference/generated_samples_{n}.json"
-            file_path = os.path.join(checkpoint_dir, file_name)
-    
     # Serialize the JSON object to a string
     json_string = json.dumps(generated_samples, indent=2)
     
@@ -109,6 +79,64 @@ def save_generated_samples(generated_samples, checkpoint_dir, overwrite=True):
     print(f"Saved generated samples to {file_path}")
 
 
+def compute_metrics(true_dec, decoded_output, **kwargs):
+    # Calculate scores for each metric
+    scores = {}
+    for metric_name, metric_func in kwargs.items():
+        try:
+            scores[metric_name] = metric_func.compute(predictions=decoded_output, references=true_dec)
+        except:
+            print(f"Error computing {metric_name}")
+            print(f"Predictions: {decoded_output}, len: {len(decoded_output)}")
+            print(f"References: {true_dec}, len: {len(true_dec)}")
+            raise Exception
+    
+    return scores
+
+def load_scores():
+    bleu_score = evaluate.load("bleu", keep_in_memory=True)
+    meteor_sc = evaluate.load("meteor", keep_in_memory=True)
+    return bleu_score, meteor_sc
+
+def compute_conditional_log_prob(model, tokenizer, prompt, continuation):
+    # Encode the input sequence
+    input_ids = tokenizer.encode(prompt + continuation, return_tensors="pt")
+    
+    # Get the model outputs (logits)
+    with torch.no_grad():
+        # outputs = model(input_ids=input_ids, attention_mask=input_ids['attention_mask']).logits
+        outputs = model(input_ids=input_ids).logits
+    
+    # Compute the softmax to obtain log probabilities
+    log_probs = torch.log(F.softmax(outputs, dim=-1))
+    
+    # Sum the log probabilities of the continuation tokens
+    continuation_ids = tokenizer.encode(continuation, add_special_tokens=False)
+    log_prob_sum = 0.0
+    for idx, token_id in enumerate(continuation_ids, start=len(tokenizer.encode(prompt, add_special_tokens=False))):
+        log_prob_sum += log_probs[0, idx, token_id].item()
+    
+    return log_prob_sum
+
+def rank_classification(model, tokenizer, prompt, true_choice, answer_choices):
+    scores = {}
+    for choice in answer_choices:
+        if choice == true_choice:
+            continue
+        log_prob_sum = compute_conditional_log_prob(model, tokenizer, prompt, choice)
+        scores[choice] = log_prob_sum
+    true_score = compute_conditional_log_prob(model, tokenizer, prompt, true_choice)
+    scores[f"true_choice"] = true_score
+
+    # sort scores by value
+    scores = {k: v for k, v in sorted(scores.items(), key=lambda item: item[1], reverse=True)}
+    print(f"scorezz: {scores}")
+
+    # get rank of true choice
+    true_rank = list(scores.keys()).index(f"true_choice") + 1
+    return scores, true_rank
+
+# In your main function
 def main():
     args = parse_args()
     def load_model(model_name_or_path):
@@ -116,16 +144,30 @@ def main():
         tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
         model = AutoModelForCausalLM.from_pretrained(model_name_or_path, config=config)
         return config, tokenizer, model
+    
+    bleu_score, meteor_sc = load_scores()
 
     _, tokenizer, model = load_model(args.model_name_or_path)
     dataset = load_from_disk(args.dataset_path)
     generated_samples = []
-    for i in random.sample(range(len(dataset)), args.num_samples):
-        example = dataset[-i]['text']
-        prompt, continuation = create_prompt(example, seperator="text")
+    all_logits = []
+    for idx, i in enumerate(random.sample(range(len(dataset)), args.num_samples)):
+        text_column = 'text' if 'text' in dataset.column_names else 'prompt'
+        row = dataset[-i]
+        example = row[text_column]
+        answer_choices = row['answer_choices'] if 'answer_choices' in row.keys() else None
+        # create prompts
+        prompt, continuation = create_prompt(example)
 
         # compute conditional log prob
         log_prob = compute_conditional_log_prob(model, tokenizer, prompt, continuation)
+
+        # rank classification
+        if answer_choices is not None:
+            scores, true_rank = rank_classification(model, tokenizer, prompt, 
+                                                    continuation, answer_choices)
+        else:
+            scores, true_rank = None, None
 
         ## debugging
         prompt_enc = tokenizer.encode(prompt, return_tensors="pt")
@@ -134,34 +176,89 @@ def main():
         true_dec = tokenizer.decode(true_enc[0], skip_special_tokens=True)
         
         input_ids = tokenizer.encode(prompt, return_tensors="pt")
-        output = model.generate(input_ids, max_new_tokens=200, pad_token_id=tokenizer.pad_token_id,
-                                do_sample=True, top_k=1, top_p=0.95, num_return_sequences=5)
-        decoded_output = tokenizer.decode(output[0], skip_special_tokens=True)[len(prompt):]
+        len_continuation = len(true_dec)
+        output = model.generate(input_ids, max_new_tokens=2*len(true_dec), pad_token_id=tokenizer.pad_token_id,
+                                do_sample=True, top_k=1, top_p=0.95, num_return_sequences=1)
+        decoded = tokenizer.decode(output[0], skip_special_tokens=True)
+        prompt_ = decoded[:len(prompt)]
+        decoded_output = decoded[len(prompt_dec):len(prompt_dec)+len(true_dec)]
+        decoded_output_long = decoded[len(prompt_dec):]
+
+        # compute metrics
+        metrics = compute_metrics(true_dec, decoded_output,
+                                  bleu_score=bleu_score, meteor_score=meteor_sc)
 
         # print and store results
-        print("-- Example {} --".format(i))
-        print(f"Prompt: {prompt}")
+        print("--- Example {} (iter {}) ---".format(i, idx))
+        print(f"Prompt: {prompt_}")
         print(f"True: {continuation}")
-        print(f"Generated: {decoded_output}")
+        print(f"Generated: {decoded_output_long}")
         print(f"Log prob: {log_prob}")
+        print(f"BLEU score: {metrics['bleu_score']}")
+        print(f"METEOR score: {metrics['meteor_score']}")
+        if answer_choices is not None:
+            print(f"True rank: {true_rank}")
+            print("Scores:")
+            for k, v in scores.items():
+                print(f"{k}: {v}")
         generated_samples_n = {
-            # "prompt": prompt,
             "prompt": prompt_dec,
-            # "true": continuation,
             "true": true_dec,
-            "generated": decoded_output,
-            "log_prob": log_prob
+            "generated": decoded_output_long,
+            "log_prob": log_prob,
+            "bleu_score": metrics['bleu_score'],
+            "meteor_score": metrics['meteor_score'],
+            "scores": scores if answer_choices is not None else None,
+            "rank": true_rank
         }
         generated_samples.append(generated_samples_n)
+
+    # get current time in month-day-hour-minute
+    now = datetime.now()
+    dt_string = now.strftime("%m-%d-%H:%M")
+    save_dir = os.path.join(args.model_name_or_path, "inference", dt_string)
+    # check if dir exists
+    if not os.path.isdir(save_dir):
+        os.makedirs(save_dir)
+
+    # save as json in checkpoint dir
+    save_generated_samples(generated_samples, save_dir, overwrite=False)
     
     # calculate average log prob
     log_probs_mean = np.mean([sample["log_prob"] for sample in generated_samples])
-    with open(os.path.join(args.model_name_or_path, "inference", "log_probs.txt"), "w") as f:
-        f.write(f"Average log prob: {log_probs_mean}\n")
-
-    # save as json in checkpoint dir
-    save_generated_samples(generated_samples, args.model_name_or_path, overwrite=False)
+    log_probs_std = np.std([sample["log_prob"] for sample in generated_samples])
+    log_probs_samples = [sample["log_prob"] for sample in generated_samples]
+    log_probs_n = len(log_probs_samples)
+    log_probs = {
+        "mean": log_probs_mean,
+        "std": log_probs_std,
+        "samples": log_probs_samples,
+        "n": log_probs_n
+    }
+    with open(os.path.join(save_dir, "log_probs.json"), "w") as f:
+        json.dump(log_probs, f)
     print(f" -- Average log prob: {log_probs_mean} -- ")
+
+    # # calculate average bleu score
+    # bleu_score_mean = np.mean([sample["bleu_score"] for sample in generated_samples])
+    # with open(os.path.join(args.model_name_or_path, "inference", "bleu_scores.txt"), "w") as f:
+    #     f.write(f"{bleu_score_mean}")
+    # print(f" -- Average BLEU score: {bleu_score_mean} -- ")
+
+    # calculate average rank
+    rank_mean = np.mean([sample["rank"] for sample in generated_samples if sample["rank"] is not None])
+    rank_std = np.std([sample["rank"] for sample in generated_samples if sample["rank"] is not None])
+    rank_samples = [sample["rank"] for sample in generated_samples if sample["rank"] is not None]
+    rank_n = len(rank_samples)
+    rank = {
+        "mean": rank_mean,
+        "std": rank_std,
+        'samples': rank_samples,
+        "n": rank_n
+    }
+    with open(os.path.join(save_dir, "rank.json"), "w") as f:
+        json.dump(rank, f)
+    print(f" -- Average rank: {rank} -- ")
 
 if __name__ == "__main__":
     main()

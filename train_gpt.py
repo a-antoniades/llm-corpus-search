@@ -50,6 +50,8 @@ import numpy as np
 from sklearn.metrics import precision_recall_fscore_support
 import torch.distributed as dist
 
+
+
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 # check_min_version("4.31.0.dev0")
 # require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
@@ -60,6 +62,23 @@ logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
+import multiprocessing
+from tqdm import tqdm
+
+def count_tokens_in_example(example):
+    # Note that the function now operates on a single example, not a batch
+    # Also, it returns a dictionary
+    return {"num_tokens": len(example['input_ids'])}
+
+def count_tokens(dataset):
+    # Create a new dataset with an additional column that contains the number of tokens in each example
+    with_lengths = dataset.map(count_tokens_in_example, num_proc=multiprocessing.cpu_count())
+
+    # Now, sum up the lengths. Note that this operation is not parallelized, 
+    # so it may be slow if the dataset is very large.
+    total_tokens = sum(tqdm(with_lengths['num_tokens'], desc="Counting tokens"))
+
+    return total_tokens
 
 @dataclass
 class ModelArguments:
@@ -171,12 +190,24 @@ class DataTrainingArguments:
     dataset_dir: Optional[str] = field(
         default=None, metadata={"help": "The directory of the dataset to use (via the datasets library)."}
     )
+    validation_dataset: Optional[str] = field(
+        default=None, metadata={"help": "The name of the validation dataset to use (via the datasets library)."}
+    )
     max_train_samples: Optional[int] = field(
         default=None,
         metadata={
             "help": (
                 "For debugging purposes or quicker training, truncate the number of training examples to this "
                 "value if set."
+            )
+        },
+    )
+    count_tokens: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Count the number of tokens in the datasets and print it. "
+                "It's useful to know this number to initialize the model's tokenizer properly."
             )
         },
     )
@@ -224,6 +255,49 @@ class DataTrainingArguments:
         if self.streaming:
             require_version("datasets>=2.0.0", "The streaming feature requires `datasets>=2.0.0`")
 
+from generate import create_prompt
+from transformers import TrainerCallback, TrainerState, TrainerControl
+
+class GenerationEvaluationCallback(TrainerCallback):
+    def __init__(self, eval_dataset, tokenizer, device, num_return_sequences=1):
+        self.eval_dataset = eval_dataset.map(create_prompt)
+        self.tokenizer = tokenizer
+        self.device = device
+        self.num_return_sequences = num_return_sequences
+
+    def on_evaluate(self, args, state, control: TrainerControl, model=None, **kwargs):
+        model.eval()  # ensure the model is in evaluation mode
+        total_generated_sequences = []
+
+        for idx in range(len(self.eval_dataset)):
+            prompt = self.eval_dataset[idx]["prompt"]
+            target = self.eval_dataset[idx]["target"]
+
+            # Prepare the prompt for the model
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+
+            # Perform generation
+            with torch.no_grad():
+                outputs = model.generate(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    num_return_sequences=self.num_return_sequences,
+                    
+                )
+
+            # Process the generated sequences
+            generated_sequences = [
+                self.tokenizer.decode(gen_seq, skip_special_tokens=True)
+                for gen_seq in outputs
+            ]
+
+            total_generated_sequences.append(generated_sequences)
+
+        # Store the generated sequences in the state for further analysis
+        state.log_history["generated_sequences"] = total_generated_sequences
+
+        return control
+
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -270,32 +344,35 @@ def main():
     )
     logger.info(f"Training/evaluation parameters {training_args}")
 
-    # Detecting last checkpoint.
-    training_args.output_dir = os.path.join(training_args.output_dir, str(data_args.dataset_dir.split("/")[-2:]))
-    if os.path.exists(training_args.output_dir):
-        # rename the output_dir
-        training_args.output_dir = training_args.output_dir + "_" + str(int(time.time()))
+    current_time = datetime.now()
+    formatted_time = str(current_time.strftime("%d-%m-%y_%H:%M"))
+    formatted_time = str(current_time.strftime("%d-%m-%y_%H:%M"))
+    MODEL_NAME = os.path.join(str(data_args.dataset_dir.split("/")[-3]),
+                              str(data_args.dataset_dir.split("/")[-2]),
+                              str(data_args.dataset_dir.split("/")[-1]),
+                              str(formatted_time))
     last_checkpoint = None
-    if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
-        last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
-            raise ValueError(
-                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
-            )
-        elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
-        current_time = datetime.now()
-        formatted_time = current_time.strftime("%d/%m/%y_%H:%M")
-        training_args.output_dir = training_args.output_dir + "_" + str(int(time.time()))
+    if not model_args.rand_init_weights:
+        if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
+            last_checkpoint = get_last_checkpoint(training_args.output_dir)
+            if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
+                raise ValueError(
+                    f"Output directory ({training_args.output_dir}) already exists and is not empty. "
+                    "Use --overwrite_output_dir to overcome."
+                )
+            elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
+                logger.info(
+                    f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
+                    "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
+                )
+    else:
+        training_args.output_dir = os.path.join(training_args.output_dir, MODEL_NAME)
+    
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
     # initialize wandb according to model name
-    wandb.init(project="Incidental Supervision", name=training_args.output_dir.split("/")[-1])
+    wandb.init(project="Incidental Supervision", name=MODEL_NAME, config=vars(training_args))
 
     # Get the datasets
     if data_args.dataset_name is not None:
@@ -329,7 +406,10 @@ def main():
         print(data_args.dataset_dir)
         raw_datasets = {}
         raw_datasets["train"] = load_from_disk(os.path.join(data_args.dataset_dir, "dataset_train.arrow"))
-        raw_datasets["validation"] = load_from_disk(os.path.join(data_args.dataset_dir, "dataset_validation.arrow"))
+        if data_args.validation_dataset is not None:
+            raw_datasets["validation"] = load_from_disk(data_args.validation_dataset)
+        else:
+            raw_datasets["validation"] = load_from_disk(os.path.join(data_args.dataset_dir, "dataset_validation.arrow"))
         raw_datasets = DatasetDict(raw_datasets)
         data_config_file = os.path.join(data_args.dataset_dir, "config.json")
         print(str(data_config_file))
@@ -445,6 +525,16 @@ def main():
                 batched=True,
                 remove_columns=column_names,
             )
+        if data_args.count_tokens:
+            token_counts = {}
+            for key in tokenized_datasets:
+                token_counts[key] = count_tokens(tokenized_datasets[key])
+            # save as json
+            with open(os.path.join(data_args.dataset_dir, "token_counts.json"), "w") as f:
+                json.dump(token_counts, f)
+        
+            logger.info(f"Counted tokens in dataset: {token_counts}")
+            exit()
 
     if data_args.block_size is None:
         block_size = tokenizer.model_max_length
@@ -535,8 +625,8 @@ def main():
             metric2 = evaluate.load("f1", keep_in_memory=True)
             metric3 = evaluate.load("bleu", keep_in_memory=True)
             metric4 = evaluate.load("meteor", keep_in_memory=True)
-            metric5 = evaluate.load("rouge", keep_in_memory=True)
-            metric6 = evaluate.load('mauve', keep_in_memory=True)
+            # metric5 = evaluate.load("rouge", keep_in_memory=True)
+            # metric6 = evaluate.load('mauve', keep_in_memory=True)
             # metric5 = evaluate.load("bertscore")
 
             print(f"Predicted: {decoded_preds[0]} \
@@ -553,8 +643,8 @@ def main():
                 "f1": f1,
                 "bleu": metric3.compute(predictions=decoded_preds, references=decoded_labels),
                 "meteor": metric4.compute(predictions=decoded_preds, references=decoded_labels),
-                "rouge": metric5.compute(predictions=decoded_preds, references=decoded_labels),
-                "mauve": metric6.compute(predictions=decoded_preds, references=decoded_labels),
+                # "rouge": metric5.compute(predictions=decoded_preds, references=decoded_labels),
+                # "mauve": metric6.compute(predictions=decoded_preds, references=decoded_labels),
             }
 
     # Initialize our Trainer
