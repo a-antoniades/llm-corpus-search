@@ -1,7 +1,9 @@
 class DatasetConfig:
-    def __init__(self, P_QA, P):
+    def __init__(self, P_QA, P, PROMPTSOURCE=True):
         self.P = P
         self.P_QA = P_QA
+        self.PROMPTSOURCE = PROMPTSOURCE
+
         self.dataset_configs = {
             'struct2text': [
                 {
@@ -127,11 +129,11 @@ class DatasetConfig:
                     'p': self.P_QA,
                     'train_split': 'train',
                     'columns': {'text': 'text', 'label': 'label'},
-                    'mapping': {'label': {0: 'very negative', 
-                                          1: 'negative',
-                                          2: 'neutral',
-                                          3: 'positive',
-                                          4: 'very positive'}
+                    'mapping': {'label': {"0": 'very negative', 
+                                          "1": 'negative',
+                                          "2": 'neutral',
+                                          "3": 'positive',
+                                          "4": 'very positive'}
                                }
                 },
                 {
@@ -141,8 +143,8 @@ class DatasetConfig:
                     'p': 1,
                     'train_split': 'train',
                     'columns': {'text': 'text', 'sentiment': 'sentiment'},
-                    'mapping': {'sentiment': {0: 'negative', 
-                                              4: 'positive'}}
+                    'mapping': {'sentiment': {"0": 'negative', 
+                                              "4": 'positive'}}
                 },
                 {
                     'dataset_type': 'text',
@@ -151,6 +153,122 @@ class DatasetConfig:
                     'p': self.P,
                     'train_split': "train[:20%]",
                 },
+                
+            ],
+            'sentiment_c4_small': [
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'imdb',
+                    'dataset_config_name': None,
+                    'p': self.P_QA,
+                    'validation_split': 'test',
+                    'columns': {'text': 'text', 'label': 'label'},
+                    'promptsource': True
+                },
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'sst2',
+                    'dataset_config_name': 'default',
+                    'p': 1,
+                    'validation_split': 'test',
+                    'columns': {'sentence': 'sentence', 'label': 'label'},
+                    'promptsource': True
+                },
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'yelp_review_full',
+                    'dataset_config_name': None,
+                    'p': self.P_QA,
+                    'train_split': 'train',
+                    'columns': {'text': 'text', 'label': 'label'},
+                    'mapping': {'label': {"0": 'very negative', 
+                                          "1": 'negative',
+                                          "2": 'neutral',
+                                          "3": 'positive',
+                                          "4": 'very positive'}
+                               }
+                },
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'sentiment140',
+                    'dataset_config_name': None,
+                    'p': 1,
+                    'train_split': 'train',
+                    'columns': {'text': 'text', 'sentiment': 'sentiment'},
+                    'mapping': {'sentiment': {"0": 'negative', 
+                                              "4": 'positive'}}
+                },
+                {
+                    'dataset_type': 'text',
+                    'dataset_name': 'c4',
+                    'dataset_config_name': 'en',
+                    # 'path': "/share/edc/home/antonis/datasets/huggingface/merged_datasets/sentiment_c4/P_1_PQA_5_promptsource_True/dataset_0/dataset_train.arrow",
+                    'path': '/share/edc/home/antonis/datasets/huggingface/merged_datasets/sentiment_unified_labels/P_1_PQA_5_promptsource_False/dataset_0/dataset_train.arrow',
+                    'p': self.P,
+                    'train_split': "train[:20%]",
+                },
+            ],
+            'sentiment_unified_labels': [
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'imdb',
+                    'dataset_config_name': None,
+                    'p': self.P_QA,
+                    'validation_split': 'test',
+                    'columns': {'text': 'text', 'label': 'label'},
+                    'promptsource': self.PROMPTSOURCE,
+                    'mapping': {'label': {"0": 'negative',
+                                          "1": 'positive'}
+                               }
+
+                },
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'sentiment140',
+                    'dataset_config_name': None,
+                    'p': 1,
+                    'validation_split': 'test',
+                    'columns': {'text': 'text', 'sentiment': 'sentiment'},
+                    'mapping': {'sentiment': {"0": 'negative', 
+                                              "2": 'neutral',
+                                              "4": 'positive'}}
+                },
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'sst2',
+                    'dataset_config_name': 'default',
+                    'p': 1,
+                    'train_split': 'train',
+                    'columns': {'sentence': 'sentence', 'label': 'label'},
+                    'promptsource': self.PROMPTSOURCE,
+                    'mapping': {'label': {"0": 'negative', 
+                                          "1": 'positive',}
+                               }
+                },
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'yelp_review_full',
+                    'dataset_config_name': None, 
+                    'p': self.P_QA,
+                    'train_split': 'train',
+                    'columns': {'text': 'text', 'label': 'label'},
+                    'mapping': {'label': {"0": 'negative', 
+                                          "1": 'negative',
+                                          "2": 'neutral',
+                                          "3": 'positive',
+                                          "4": 'positive'}
+                               }
+                },
+                {
+                    'dataset_type': 'text',
+                    'dataset_name': 'c4',
+                    'dataset_config_name': 'en',
+                    # 'path': "/share/edc/home/antonis/datasets/huggingface/merged_datasets/sentiment_c4/P_1_PQA_5_promptsource_True/dataset_0/dataset_train.arrow",
+                    'path': '/share/edc/home/antonis/datasets/huggingface/merged_datasets/sentiment_unified_labels/P_1_PQA_5_promptsource_False/dataset_0/dataset_train.arrow',
+                    'p': self.P,
+                    'train_split': "train[:20%]",
+                },
+                
             ]
 
         }

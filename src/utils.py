@@ -1,16 +1,60 @@
+import os
 from transformers import AutoTokenizer
 from datasets import load_dataset
+import multiprocessing
+from tqdm import tqdm
 
-def count_tokens(dataset, tokenizer):
-    """Count the total number of tokens in the dataset
-    Args:
-        dataset (datasets.Dataset): Dataset to count the tokens of
-        tokenizer (transformers.PreTrainedTokenizer): Tokenizer to use
-    """
-    total_tokens = 0
-    # Loop through the dataset
-    for example in dataset:
-        # Tokenize the text and increment the token count
-        tokens = tokenizer.tokenize(example['text']) # assuming the text field is called 'text'
-        total_tokens += len(tokens)
+def count_tokens_in_example(example):
+    # Note that the function now operates on a single example, not a batch
+    # Also, it returns a dictionary
+    return {"num_tokens": len(example['input_ids'])}
+
+def count_tokens(dataset):
+    # Create a new dataset with an additional column that contains the number of tokens in each example
+    with_lengths = dataset.map(count_tokens_in_example, num_proc=multiprocessing.cpu_count())
+
+    # Now, sum up the lengths. Note that this operation is not parallelized, 
+    # so it may be slow if the dataset is very large.
+    total_tokens = sum(tqdm(with_lengths['num_tokens'], desc="Counting tokens"))
+
     return total_tokens
+
+
+def limit_total_tokens(tokenized_dataset, max_tokens):
+    """
+    Limit the total number of tokens in a Hugging Face Tokenized Dataset.
+
+    Parameters:
+    tokenized_dataset (datasets.Dataset): Hugging Face Tokenized Dataset to limit.
+    max_tokens (int): Maximum total number of tokens.
+    tokenizer (transformers.PreTrainedTokenizer): The tokenizer used for tokenizing the dataset.
+
+    Returns:
+    datasets.Dataset: Limited Hugging Face Tokenized Dataset.
+    """
+    
+    total_tokens = 0
+    indices_to_keep = []
+
+    # iterate with a progress bar
+    for i, example in enumerate(tqdm(tokenized_dataset)):
+        num_tokens = len(example["input_ids"])
+        total_tokens += num_tokens
+
+        if total_tokens > max_tokens:
+            break
+
+        indices_to_keep.append(i)
+
+    return tokenized_dataset.select(indices_to_keep)
+
+
+def filter_path(path, keywords):
+    parts = path.split(os.sep)
+    filtered_parts = []
+    for part in parts:
+        if any(keyword in part for keyword in keywords):
+            filtered_parts.append(part)
+        if len(filtered_parts) == len(keywords):
+            break
+    return os.sep.join(filtered_parts)
