@@ -21,7 +21,7 @@ import evaluate
 
 
 set_seed(42)
-bleu_score = evaluate.load("bleu", keep_in_memory=True, )
+bleu_score = evaluate.load("bleu", keep_in_memory=True)
 meteor_sc = evaluate.load("meteor", keep_in_memory=True)
 
 def parse_args():
@@ -34,6 +34,9 @@ def parse_args():
     )
     parser.add_argument(
         "--num_samples", default=10, type=int, help="Number of samples to generate"
+    )
+    parser.add_argument(
+        "--answer_choices", default=None, nargs='*', help="Answer choices for rank classification"
     )
     args = parser.parse_args()
     return args
@@ -59,6 +62,13 @@ def create_prompt(text):
         assert len(text) == 2, "text must be a list of length 2"
         prompt = text[0]
         target = text[1]
+
+    # # add space after prompt
+    # if prompt[-1] != " ":
+    #     prompt += " "
+    # # remove space before target
+    # if target[0] == " ":
+    #     target = target[1:]
 
     return prompt, target
 
@@ -90,7 +100,6 @@ def compute_metrics(true_dec, decoded_output, **kwargs):
             print(f"Predictions: {decoded_output}, len: {len(decoded_output)}")
             print(f"References: {true_dec}, len: {len(true_dec)}")
             raise Exception
-    
     return scores
 
 def load_scores():
@@ -99,33 +108,78 @@ def load_scores():
     return bleu_score, meteor_sc
 
 def compute_conditional_log_prob(model, tokenizer, prompt, continuation):
+    # Combine prompt and continuation
+    total_sequence = prompt + continuation
+
     # Encode the input sequence
-    input_ids = tokenizer.encode(prompt + continuation, return_tensors="pt")
-    
+    input_ids = tokenizer.encode(total_sequence, return_tensors="pt")
+
     # Get the model outputs (logits)
     with torch.no_grad():
-        # outputs = model(input_ids=input_ids, attention_mask=input_ids['attention_mask']).logits
-        outputs = model(input_ids=input_ids).logits
-    
-    # Compute the softmax to obtain log probabilities
-    log_probs = torch.log(F.softmax(outputs, dim=-1))
-    
-    # Sum the log probabilities of the continuation tokens
+        outputs = model(input_ids).logits
+
+    # Compute the softmax to obtain probabilities
+    probs = F.softmax(outputs, dim=-1)
+
+    # Compute the log probabilities
+    log_probs = torch.log(probs)
+
+    # Sum the log probabilities of the tokens in the continuation
     continuation_ids = tokenizer.encode(continuation, add_special_tokens=False)
+    prompt_length = len(tokenizer.encode(prompt, add_special_tokens=False))
     log_prob_sum = 0.0
-    for idx, token_id in enumerate(continuation_ids, start=len(tokenizer.encode(prompt, add_special_tokens=False))):
-        log_prob_sum += log_probs[0, idx, token_id].item()
-    
+    for idx, token_id in enumerate(continuation_ids):
+        log_prob_sum += log_probs[0, prompt_length + idx, token_id].item()
+
     return log_prob_sum
 
+def compute_greedy_decoding_log_prob(model, tokenizer, prompt, continuation):
+    # Encode the prompt
+    input_ids = tokenizer.encode(prompt, return_tensors="pt")
+
+    # Encode the continuation
+    continuation_ids = tokenizer.encode(continuation, add_special_tokens=False)
+
+    log_prob_sum = 0.0
+
+    with torch.no_grad():
+        for token_id in continuation_ids:
+            # Get the model outputs (logits) for the current sequence
+            outputs = model(input_ids).logits
+
+            # Compute the softmax to obtain probabilities
+            probs = F.softmax(outputs[:, -1, :], dim=-1)
+
+            # Compute the log probability of the next token in the continuation
+            log_prob = torch.log(probs[0, token_id]).item()
+
+            # Add the log probability to the total sum
+            log_prob_sum += log_prob
+
+            # Append the current token to the input sequence for the next step
+            input_ids = torch.cat([input_ids, torch.tensor([[token_id]], dtype=torch.long)], dim=-1)
+
+    return log_prob_sum
+
+
+# TODO: Truncate answer choices to same length
 def rank_classification(model, tokenizer, prompt, true_choice, answer_choices):
+    len_choice = 4
     scores = {}
+    true_choice = true_choice[:len_choice]
+    has_space = true_choice[0] == " "
+    print(f"answer choices: {answer_choices}")
     for choice in answer_choices:
+        # add space before choice
+        if has_space and choice[0] != " ":
+            choice = " " + choice
+        # truncate choice to same length
+        choice = choice[:4]
         if choice == true_choice:
             continue
-        log_prob_sum = compute_conditional_log_prob(model, tokenizer, prompt, choice)
+        log_prob_sum = compute_greedy_decoding_log_prob(model, tokenizer, prompt, choice)
         scores[choice] = log_prob_sum
-    true_score = compute_conditional_log_prob(model, tokenizer, prompt, true_choice)
+    true_score = compute_greedy_decoding_log_prob(model, tokenizer, prompt, true_choice)
     scores[f"true_choice"] = true_score
 
     # sort scores by value
@@ -141,7 +195,7 @@ def main():
     args = parse_args()
     def load_model(model_name_or_path):
         config = AutoConfig.from_pretrained(model_name_or_path)
-        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, config=config)
         model = AutoModelForCausalLM.from_pretrained(model_name_or_path, config=config)
         return config, tokenizer, model
     
@@ -155,12 +209,24 @@ def main():
         text_column = 'text' if 'text' in dataset.column_names else 'prompt'
         row = dataset[-i]
         example = row[text_column]
-        answer_choices = row['answer_choices'] if 'answer_choices' in row.keys() else None
+
+        # get answer choices for rank classification
+        if args.answer_choices is None:
+            answer_choices = row['answer_choices'] if 'answer_choices' in row.keys() else None
+        else:
+            answer_choices = args.answer_choices
+        
         # create prompts
         prompt, continuation = create_prompt(example)
 
         # compute conditional log prob
-        log_prob = compute_conditional_log_prob(model, tokenizer, prompt, continuation)
+        try:
+            log_prob = compute_conditional_log_prob(model, tokenizer, prompt, continuation)
+        except:
+            print(f"Error computing log prob for example {i}")
+            print(f"Prompt: {prompt}")
+            print(f"Continuation: {continuation}")
+            continue
 
         # rank classification
         if answer_choices is not None:
@@ -177,8 +243,14 @@ def main():
         
         input_ids = tokenizer.encode(prompt, return_tensors="pt")
         len_continuation = len(true_dec)
-        output = model.generate(input_ids, max_new_tokens=2*len(true_dec), pad_token_id=tokenizer.pad_token_id,
-                                do_sample=True, top_k=1, top_p=0.95, num_return_sequences=1)
+        try:
+            output = model.generate(input_ids, max_new_tokens=2*len(true_dec), pad_token_id=tokenizer.pad_token_id,
+                                    do_sample=False, top_k=1, top_p=0.95, num_return_sequences=1)
+        except:
+            print(f"Error generating for example {i}")
+            print(f"Prompt: {prompt}")
+            print(f"Continuation: {continuation}")
+            continue
         decoded = tokenizer.decode(output[0], skip_special_tokens=True)
         prompt_ = decoded[:len(prompt)]
         decoded_output = decoded[len(prompt_dec):len(prompt_dec)+len(true_dec)]
@@ -196,6 +268,8 @@ def main():
         print(f"Log prob: {log_prob}")
         print(f"BLEU score: {metrics['bleu_score']}")
         print(f"METEOR score: {metrics['meteor_score']}")
+        print(f"Scores: {scores}")
+        print(f"Rank: {true_rank}")
         if answer_choices is not None:
             print(f"True rank: {true_rank}")
             print("Scores:")

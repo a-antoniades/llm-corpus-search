@@ -49,8 +49,10 @@ import wandb
 import numpy as np
 from sklearn.metrics import precision_recall_fscore_support
 import torch.distributed as dist
+from src.utils import count_tokens
 
-
+CACHE_DIR = "/share/edc/home/antonis/datasets/huggingface"
+os.environ["HF_DATASETS_CACHE"] = CACHE_DIR
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 # check_min_version("4.31.0.dev0")
@@ -61,24 +63,6 @@ logger = logging.getLogger(__name__)
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
-
-import multiprocessing
-from tqdm import tqdm
-
-def count_tokens_in_example(example):
-    # Note that the function now operates on a single example, not a batch
-    # Also, it returns a dictionary
-    return {"num_tokens": len(example['input_ids'])}
-
-def count_tokens(dataset):
-    # Create a new dataset with an additional column that contains the number of tokens in each example
-    with_lengths = dataset.map(count_tokens_in_example, num_proc=multiprocessing.cpu_count())
-
-    # Now, sum up the lengths. Note that this operation is not parallelized, 
-    # so it may be slow if the dataset is very large.
-    total_tokens = sum(tqdm(with_lengths['num_tokens'], desc="Counting tokens"))
-
-    return total_tokens
 
 @dataclass
 class ModelArguments:
@@ -208,6 +192,22 @@ class DataTrainingArguments:
             "help": (
                 "Count the number of tokens in the datasets and print it. "
                 "It's useful to know this number to initialize the model's tokenizer properly."
+            )
+        },
+    )
+    limit_total_tokens: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Truncate the number of total tokens in the datasets to this value, "
+            )
+        },
+    )
+    save_tokenized_ds: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Save the tokenized dataset to disk."
             )
         },
     )
@@ -419,8 +419,6 @@ def main():
         artifact.add_file(data_config_file)
         wandb.log_artifact(artifact)
             
-        
-
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -525,6 +523,7 @@ def main():
                 batched=True,
                 remove_columns=column_names,
             )
+
         if data_args.count_tokens:
             token_counts = {}
             for key in tokenized_datasets:
@@ -534,6 +533,22 @@ def main():
                 json.dump(token_counts, f)
         
             logger.info(f"Counted tokens in dataset: {token_counts}")
+
+        if data_args.limit_total_tokens is not None:
+            from src.utils import limit_total_tokens
+            # limit total tokens of TRAIN dataset ONLY
+            tokenized_datasets['train'] = limit_total_tokens(tokenized_datasets['train'], data_args.limit_total_tokens)
+            save_path = os.path.join(CACHE_DIR, "C4", f"limit_total_tokens_{data_args.limit_total_tokens}")
+            tokenized_datasets.save_to_disk(save_path)
+            logger.info(f"Saved tokenized datasets to {save_path}")
+            exit()
+        
+        if data_args.save_tokenized_ds is True:
+            save_path = os.path.join(data_args.dataset_dir, "tokenized")
+            tokenized_datasets.save_to_disk(save_path)
+            with open(os.path.join(save_path, "token_counts.json"), "w") as f:
+                json.dump(token_counts, f)
+            logger.info(f"Saved tokenized datasets to {save_path}")
             exit()
 
     if data_args.block_size is None:
