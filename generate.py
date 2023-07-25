@@ -43,7 +43,8 @@ def parse_args():
 
 def create_prompt(text):
     separator_candidates = ["'text':", "summary", "'target':", 
-                            "label:", "sentiment:"]
+                            "label:", "sentiment:",
+                            "entailment, neutral, or contradiction?"]
     matches = None
     if isinstance(text, str):
         for m in separator_candidates:
@@ -55,7 +56,7 @@ def create_prompt(text):
         else:
             # just split string in half
             indices = [len(text) // 2]
-        text_input = text[:indices[0]], text[indices[0]:]
+        text_input = text[:indices[0] + 1], text[indices[0] + 1:]
         prompt = text_input[0]
         target = text_input[1]
     elif isinstance(text, list):
@@ -170,7 +171,7 @@ def rank_classification(model, tokenizer, prompt, true_choice, answer_choices):
     has_space = true_choice[0] == " "
     print(f"answer choices: {answer_choices}")
     for choice in answer_choices:
-        # add space before choice
+        # add space before choice2
         if has_space and choice[0] != " ":
             choice = " " + choice
         # truncate choice to same length
@@ -218,6 +219,9 @@ def main():
         
         # create prompts
         prompt, continuation = create_prompt(example)
+
+        print(f"Prompt: {prompt}")
+        print(f"Continuation: {continuation}")
 
         # compute conditional log prob
         try:
