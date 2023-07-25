@@ -50,9 +50,14 @@ import numpy as np
 from sklearn.metrics import precision_recall_fscore_support
 import torch.distributed as dist
 from src.utils import count_tokens
+from src._trainer_callbacks import WandbCallback
 
 CACHE_DIR = "/share/edc/home/antonis/datasets/huggingface"
 os.environ["HF_DATASETS_CACHE"] = CACHE_DIR
+os.environ["WANDB_LOG_MODEL"] = "true"
+# os.environ["WANDB_MODE"] = "dry_run"
+os.environ["WANDB_WATCH"] = "fall"
+
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 # check_min_version("4.31.0.dev0")
@@ -371,8 +376,10 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    # initialize wandb according to model name
-    wandb.init(project="Incidental Supervision", name=MODEL_NAME, config=vars(training_args))
+    os.environ["WANDB_PROJECT"] = "Incidental Supervision"
+    os.environ["WANDB_NAME"] = MODEL_NAME
+    # wandb.init(project="Incidental Supervision", name=MODEL_NAME, config=vars(training_args),
+    #             group="NLI")
 
     # Get the datasets
     if data_args.dataset_name is not None:
@@ -414,10 +421,10 @@ def main():
         data_config_file = os.path.join(data_args.dataset_dir, "config.json")
         print(str(data_config_file))
         file_path = data_config_file
-        json_data_config = json.load(open(file_path))  # Use a different variable name here
-        artifact = wandb.Artifact('data_config', type='data_config', description='data_config', metadata={'data_args': json_data_config})
-        artifact.add_file(data_config_file)
-        wandb.log_artifact(artifact)
+        # json_data_config = json.load(open(file_path))  # Use a different variable name here
+        # artifact = wandb.Artifact('data_config', type='data_config', description='data_config', metadata={'data_args': json_data_config})
+        # artifact.add_file(data_config_file)
+        # wandb.log_artifact(artifact)
             
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
@@ -533,6 +540,7 @@ def main():
                 json.dump(token_counts, f)
         
             logger.info(f"Counted tokens in dataset: {token_counts}")
+            exit()
 
         if data_args.limit_total_tokens is not None:
             from src.utils import limit_total_tokens
@@ -669,6 +677,7 @@ def main():
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
+        report_to="wandb",
         # Data collator will default to DataCollatorWithPadding, so we change it.
         data_collator=default_data_collator,
         compute_metrics=compute_metrics if training_args.do_eval and not is_torch_tpu_available() else None,
