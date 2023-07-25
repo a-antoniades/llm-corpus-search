@@ -7,7 +7,7 @@ from datasets import concatenate_datasets
 from datasets import DatasetDict
 from transformers import set_seed
 
-from promptsource.templates import DatasetTemplates, TemplateCollection
+# from promptsource.templates import DatasetTemplates, TemplateCollection
 
 import random
 import numpy as np
@@ -43,7 +43,13 @@ def concatenate_cols(example, columns: Optional[dict] = None, new_col_name=NEW_C
     if columns is None:
         concatenated_text = example['text']
     else:
-        concatenated_text = " ".join(f"{new_col}: {str(find_value(example, old_col))}" for old_col, new_col in columns.items())
+        concatenated_text = " ".join(f"{new_col} {str(find_value(example, old_col))}" for old_col, new_col in columns.items())
+    #     concatenated_text = " ".join(
+    #     f"{new_col}: {' '.join(str(item) for item in find_value(example, old_col))}"
+    #     if isinstance(find_value(example, old_col), list)
+    #     else f"{new_col}: {str(find_value(example, old_col))}"
+    #     for old_col, new_col in columns.items()
+    # )
     
     # Remove certain characters from concatenated_text
     characters_to_remove = ["{", "}"]
@@ -105,10 +111,16 @@ def to_promptsource(dataset, templates, new_col_name=NEW_COL_NAME):
         return {new_col_name: template.apply(example)}
     
     prompted_dataset = dataset.map(lambda example: apply_template(example, templates, new_col_name=new_col_name))
+
+    # if column is list of lists, make into list of strings
+    if isinstance(prompted_dataset[new_col_name][0], list):
+        prompted_dataset = prompted_dataset.map(lambda example: {new_col_name: ' '.join(example[new_col_name])})
+
     # keep only the new column
     return remove_redundant_columns(prompted_dataset, new_col_name)
+    
 
-def map_labels(dataset, label_mapping, columns):
+def map_labels(dataset, label_mapping, column_mapping):
     """
     Map labels in a dataset to new labels.
     
@@ -117,12 +129,18 @@ def map_labels(dataset, label_mapping, columns):
     :return: The dataset with mapped labels.
     """
     print(f"Mapping labels: {label_mapping}")
-    text_column = list(columns.keys())[0]
-    label_column = list(label_mapping.keys())[0]
+    text_column = list()
+    label_column = 'label'
+    # new_label_column = column_mapping[label_column]
     label_mapping = label_mapping[label_column]
 
     def map_label(example):
+        # try:
         example[label_column] = label_mapping[example[label_column]]
+        # except:
+        #     # print(f"Label {example[label_column]} not found in mapping, skipping")
+        #     # skip example if label not found in mapping
+        #     example[label_column] = None
         return example
 
     # map labels and replace the original column
@@ -134,12 +152,7 @@ def map_labels(dataset, label_mapping, columns):
     dataset = dataset.cast(new_dataset)
     dataset = dataset.map(map_label)
 
-    # concatenate text and label columns
-    prompt_mapping = {
-        text_column: 'review',
-        label_column: 'sentiment'
-    }
-    dataset = concatenate_columns(dataset, columns=prompt_mapping, new_col_name=NEW_COL_NAME)
+    dataset = concatenate_columns(dataset, columns=column_mapping, new_col_name=NEW_COL_NAME)
 
     # remove the original label column
     dataset = remove_redundant_columns(dataset, column_to_keep=NEW_COL_NAME)
@@ -166,16 +179,25 @@ def load_and_sample_dataset(dataset_config, cache_dir):
     columns = dataset_config.get('columns', None)
 
     def process_dataset(dataset, dataset_name, dataset_config_name, 
-                        is_promptsource, proportion, columns, label_mapping, dataset_config):
-    
+                        is_promptsource, proportion, column_mapping, label_mapping, dataset_config):
+
+        if label_mapping is not None:
+            mapping_labels = set(label_mapping['label'].keys())
+            print(f"mapping_labels: {mapping_labels}")
+            print(f"dataset_labels: {set(dataset['label'])}")
+            dataset = dataset.filter(lambda example: str(example['label']) in mapping_labels)
+            assert len(dataset) > 0, f"Dataset {dataset_name} has no examples after filtering"
+            
         processed_dataset = sample_split(dataset, proportion, 
                                          dataset_config.get('max_examples', None))
         
-        assert label_mapping is None or is_promptsource == False, "If dataset is a promptsource, label_mapping must not be specified"
+        # assert label_mapping is None or is_promptsource == False, "If dataset is a promptsource, label_mapping must not be specified"
 
         # verbalize numeric labels
-        if label_mapping is not None:
-            processed_dataset = map_labels(processed_dataset, label_mapping, columns)
+        if label_mapping is not None and not is_promptsource:
+            if MAP_COLS is False:
+                column_mapping = {k: f"{k}:" for k in column_mapping.keys()}
+            processed_dataset = map_labels(processed_dataset, label_mapping, column_mapping)
 
         # convert text to promptsource
         if is_promptsource:
@@ -187,8 +209,10 @@ def load_and_sample_dataset(dataset_config, cache_dir):
             #     print(f"Dataset {dataset_name} does not have templates, skipping promptsouce")
             #     assert columns is not None, "If dataset is not a promptsource, columns must be specified"
             #     processed_dataset = concatenate_columns(processed_dataset, columns)
-        elif columns is not None:
-            processed_dataset = concatenate_columns(processed_dataset, columns)
+        elif column_mapping is not None:
+            if isinstance(column_mapping, dict):
+                columns = list(column_mapping.keys())
+            processed_dataset = concatenate_columns(processed_dataset, column_mapping)
         else:
             processed_dataset = remove_redundant_columns(processed_dataset)
 
@@ -203,7 +227,7 @@ def load_and_sample_dataset(dataset_config, cache_dir):
     # Sample training dataset
     train_split = dataset_config.get('train_split', None)
     print(train_split)
-    if train_split is not None:
+    if train_split is not None and proportion > 0:
         # load train dataset
         if dataset_config.get('path', None) is not None:
             print(F"Loading dataset from path: {dataset_config['path']}")
@@ -216,6 +240,7 @@ def load_and_sample_dataset(dataset_config, cache_dir):
                 use_auth_token=use_auth_token,
                 split=train_split,
             )
+        print(f"ds_name: {dataset_name}, ds_config_name: {dataset_config_name}, train_split: {train_split}")
         train_dataset = process_dataset(train_dataset, 
                                         dataset_name, dataset_config_name, 
                                         is_promptsource, proportion, columns,
@@ -225,7 +250,7 @@ def load_and_sample_dataset(dataset_config, cache_dir):
 
     # Sample validation dataset
     val_split = dataset_config.get('validation_split', None)
-    if val_split is not None:
+    if val_split is not None and proportion > 0:
         # load train dataset
         validation_dataset = load_dataset(
             dataset_name,
@@ -246,7 +271,6 @@ def load_and_sample_dataset(dataset_config, cache_dir):
     return train_dataset, validation_dataset
 
 
-
 def pack_examples(dataset, max_n):
     # Create a list to store the packed examples
     packed_text = []
@@ -264,8 +288,8 @@ def pack_examples(dataset, max_n):
         n = np.random.randint(1, max_n + 1)
         # Select n examples starting from current index
         selected_text = all_text[index: index + n]
-        # Concatenate the text of the selected examples
-        concatenated_text = ' '.join(selected_text)
+        # Concatenate the text of the selected examples (and add newline)
+        concatenated_text = ' \n '.join(selected_text)
         # Append the concatenated text to packed_text list
         packed_text.append(concatenated_text)
         # Update the index for next iteration
@@ -276,7 +300,6 @@ def pack_examples(dataset, max_n):
     
     # Return the packed dataset
     return packed_dataset
-
 
 
 def merge_datasets(dataset_configs, pack_qa: Optional[int] = None, cache_dir: Optional[str] = None):
@@ -313,7 +336,7 @@ def merge_datasets(dataset_configs, pack_qa: Optional[int] = None, cache_dir: Op
             datasets_by_type['validation'].append(validation_dataset)
         print(f"train_dataset: {train_dataset}")
         print(f"validation_dataset: {validation_dataset}")
-        assert train_dataset is not None or validation_dataset is not None, f"Neither train nor validation dataset is available for {config['dataset_name']}."
+        # assert train_dataset is not None or validation_dataset is not None, f"Neither train nor validation dataset is available for {config['dataset_name']}."
 
     # Randomly sample from 'text' datasets
     qa_train_datasets = datasets_by_type['train']['QA']
@@ -373,11 +396,12 @@ def merge_datasets(dataset_configs, pack_qa: Optional[int] = None, cache_dir: Op
 if __name__ == "__main__":
     CACHE_DIR = "/share/edc/home/antonis/datasets/huggingface"
     DATASET_DIR = os.path.join(CACHE_DIR, "merged_datasets")
-    DATASET_TYPE = "sentiment_c4_small"
-    P_QA = 1
+    DATASET_TYPE = "NLI"
+    P_QA = 0.1
     P = 1
-    QA_PACKING = 5
+    QA_PACKING = 1
     PROMPTSOURCE = False
+    MAP_COLS = False
     
     # Define dataset configurations
     from dataset_configs import DatasetConfig
@@ -389,14 +413,14 @@ if __name__ == "__main__":
 
     # export newly created dataset
     ds_folder = os.path.join(DATASET_DIR, DATASET_TYPE, 
-                             f"P_{P}_PQA_{str(QA_PACKING)}_promptsource_{PROMPTSOURCE}", f"dataset_{P_QA}")
+                             f"P_{P}_PQA_{str(QA_PACKING)}_psource_{PROMPTSOURCE}_prompt_{MAP_COLS}", f"dataset_{P_QA}")
     print(f"Saving dataset to {ds_folder}...")
     if not os.path.exists(ds_folder):
         os.makedirs(ds_folder)
     n_folders = len(os.listdir(DATASET_DIR))
     for split in merged_datasets.keys():
         if split == 'validation':
-            print(f"skipping train split to {ds_folder}...")
+            print(f"skipping validation split to {ds_folder}...")
             continue
         merged_datasets[split].save_to_disk(os.path.join(ds_folder, f"dataset_{split}.arrow"))
     # save config
