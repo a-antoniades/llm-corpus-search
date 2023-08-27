@@ -1,20 +1,16 @@
 # LLM-Incidental-Supervision
-Incidental Supervision
+## Incidental Supervision
 
-## How to use environment
+### Environment Setup
 
-I needed to change the huggingface libarary a little bit, to properly track training dynamics accross multiple datasets.
+To track training dynamics across multiple datasets, modifications were made to the HuggingFace library. Please use the provided conda environment. The path to this environment is `/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/env/bin/python`. You have been granted permissions to this file, and you are free to copy it into your own directory.
 
-Please use this conda environment, you can just specify this path: `/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/env/bin/python` (I gave you permissions to this file, feel free to copy it into your own directory)
+### Data Usage
 
-## How to use data
+The paths to the data are embedded within the scripts and code. You have been granted permissions, so running these should work without issues. Please report any problems encountered.
 
-The paths to the data are included inside the scripts and code.
-I gave you permissions, so as long as you run those, everything should work, but let me know if that's not the case
+Please keep all data (including tokenized data cache) inside the specified directories, so we can have them all in one place!
 
-## How to run the code
+### Code Execution
 
-@Xinyi, the baseline model experiment is included in ```exp_1train_baselines.sh```
-
-
-
+The baseline model experiment is included in the script `exp_1train_baselines.sh`. To run the experiment, execute this script.
