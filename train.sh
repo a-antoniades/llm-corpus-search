@@ -131,7 +131,7 @@
 # torchrun --rdzv_backend c10d --rdzv_endpoint localhost:0 --nproc_per_node 8 \
 
 DATASET="/share/edc/home/antonis/datasets/huggingface/flan_v1/c4_mixed_NLI"
-VALIDATION_DATASET='/share/edc/home/antonis/datasets/huggingface/flan_v1_task_ds_n_20000'
+VALIDATION_DATASET='/share/edc/home/antonis/datasets/huggingface/flan_v1_task_ds_n_5000'
 DATASET_TYPE=$(echo "$DATASET" | awk -F/ '{print $(NF-1) "/" $NF}')
 WANDB_MODE="dryrun"
 BATCH_SIZE=3
@@ -139,6 +139,7 @@ REPORT_TO=False
 MODEL_NAME="EleutherAI/pythia-1.4B-deduped"
 EXP_PATH="./models/pythia/scrap"
 export CUDA_VISIBLE_DEVICES=0
+export OMP_NUM_THREADS=32
 python train_gpt.py \
    --count_tokens False \
    --model_type pythia \
