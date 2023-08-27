@@ -1,0 +1,5 @@
+,tokens,examples
+QA,1.23e+06,1.07e+04
+Summarization,5.59e+08,7.23e+05
+Commonsense,1.61e+08,3.73e+05
+NLI,1.00e+07,7.00e+05

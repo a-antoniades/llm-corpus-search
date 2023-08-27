@@ -1,34 +1,31 @@
+from transformers.integrations import WandbCallback
 from transformers import TrainerCallback
 import wandb
 
-class WandbCallback(TrainerCallback):
-    def __init__(self):
+class CustomWandbCallback(WandbCallback):
+    def __init__(self, report_every):
         super().__init__()
-        self.alert_sent = False
+        self.report_every = report_every
 
-    def on_evaluate(self, args, state, control):
-        n_alert_epoch = 5
-        if state.global_step > n_alert_epoch and not self.alert_sent:
-            # Obtain the training loss
-            loss = state.log_history[-1]['loss']
+    def on_step_end(self, args, state, control, **kwargs):
+        super().on_step_end(args, state, control, **kwargs)
+        if state.global_step % self.report_every == 0:
+            if state.is_world_process_zero:
+                last_training_log = state.log_history[-1]  # Get the last training log
+                loss = last_training_log.get('loss', 'N/A')  # Get the loss from the log
+                wandb.alert(
+                    title=f"Step {state.global_step} report",
+                    text=f"Reached {state.global_step} steps. Current loss: {loss}",
+                    level=wandb.AlertLevel.INFO
+                )
 
-            # Calculate the validation loss
-            trainer = control.trainer
-            eval_dataloader = trainer.get_eval_dataloader()
-            output = trainer.prediction_loop(
-                eval_dataloader, 
-                description="Validation"
-            )
-            validation_loss = output.metrics['eval_loss']
 
-            # Generate the text for the alert
-            text = f"Step: {state.global_step}, Loss: {loss}, Validation Loss: {validation_loss}"
-
-            # Send the alert
-            wandb.alert(
-                title=f"Approximately {n_alert_epoch} Steps finished", 
-                text=text
-            )
-
-            # Mark the alert as sent
-            self.alert_sent = True
+class CustomEvaluationCallback(TrainerCallback):
+    def on_evaluate(self, args, state, control, trainer, **kwargs):
+        eval_results = {}
+        for key, dataset in trainer.eval_dataset_dict.items():
+            output = trainer.evaluate(dataset)
+            metrics = trainer.compute_metrics(output)
+            eval_results[key] = metrics
+        state.log_history["eval_results"] = eval_results
+        return control

@@ -50,13 +50,11 @@ import numpy as np
 from sklearn.metrics import precision_recall_fscore_support
 import torch.distributed as dist
 from src.utils import count_tokens
-from src._trainer_callbacks import WandbCallback
+from src._trainer_callbacks import CustomWandbCallback, CustomEvaluationCallback
+
 
 CACHE_DIR = "/share/edc/home/antonis/datasets/huggingface"
 os.environ["HF_DATASETS_CACHE"] = CACHE_DIR
-os.environ["WANDB_LOG_MODEL"] = "true"
-# os.environ["WANDB_MODE"] = "dry_run"
-os.environ["WANDB_WATCH"] = "fall"
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -68,6 +66,9 @@ logger = logging.getLogger(__name__)
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+
+
+from transformers import GPTNeoXForCausalLM, GPTNeoXConfig
 
 @dataclass
 class ModelArguments:
@@ -246,12 +247,18 @@ class DataTrainingArguments:
         },
     )
     preprocessing_num_workers: Optional[int] = field(
-        default=None,
+        default=8,
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
     keep_linebreaks: bool = field(
         default=True, metadata={"help": "Whether to keep line breaks when using TXT files or not."}
     )
+    report_every: Optional[int] = field(
+        default=50000,
+        metadata={"help": "Report training progress every X updates steps."},
+    )
+    tokenize_only: Optional[bool] = field(default=False)
+    wandb_mode: Optional[str] = field(default="run")
     # torch_compile: bool = field(
     #     default=False,
     #     metadata={"help": "Whether to compile the model using torch.jit.script or not."},
@@ -322,6 +329,10 @@ def main():
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
     send_example_telemetry("run_clm", model_args, data_args)
 
+    os.environ["WANDB_LOG_MODEL"] = "true"
+    os.environ["WANDB_MODE"] = data_args.wandb_mode
+    os.environ["WANDB_WATCH"] = "fall"
+
     # os.environ["WANDB_DISABLED"] = "true"
 
     # Setup logging
@@ -351,11 +362,14 @@ def main():
 
     current_time = datetime.now()
     formatted_time = str(current_time.strftime("%d-%m-%y_%H:%M"))
-    formatted_time = str(current_time.strftime("%d-%m-%y_%H:%M"))
-    MODEL_NAME = os.path.join(str(data_args.dataset_dir.split("/")[-3]),
+    MODEL_NAME = os.path.join(
+                              str(data_args.dataset_dir.split("/")[-3]),
                               str(data_args.dataset_dir.split("/")[-2]),
                               str(data_args.dataset_dir.split("/")[-1]),
-                              str(formatted_time))
+                              f"{model_args.model_name_or_path}_ckpt_{model_args.rand_init_weights == False}",
+                            )
+    training_args.run_name = MODEL_NAME.replace("/", "_")
+    training_args.output_dir = os.path.join(training_args.output_dir, MODEL_NAME)
     last_checkpoint = None
     if not model_args.rand_init_weights:
         if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
@@ -370,16 +384,15 @@ def main():
                     f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
                     "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
                 )
-    else:
-        training_args.output_dir = os.path.join(training_args.output_dir, MODEL_NAME)
     
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    os.environ["WANDB_PROJECT"] = "Incidental Supervision"
-    os.environ["WANDB_NAME"] = MODEL_NAME
-    # wandb.init(project="Incidental Supervision", name=MODEL_NAME, config=vars(training_args),
-    #             group="NLI")
+    os.environ["WANDB_PROJECT"] = "Incidental Supervision - experiment_1"
+    os.environ["WANDB_NAME"] = MODEL_NAME.replace("/", "_")
+    # if torch.distributed.get_rank() == 0:
+    #     wandb.init(project="Incidental Supervision", name=MODEL_NAME, config=vars(training_args),
+    #                 group="NLI")
 
     # Get the datasets
     if data_args.dataset_name is not None:
@@ -412,7 +425,7 @@ def main():
         # Loading a dataset from your local files.
         print(data_args.dataset_dir)
         raw_datasets = {}
-        raw_datasets["train"] = load_from_disk(os.path.join(data_args.dataset_dir, "dataset_train.arrow"))
+        raw_datasets["train"] = load_from_disk(data_args.dataset_dir)
         if data_args.validation_dataset is not None:
             raw_datasets["validation"] = load_from_disk(data_args.validation_dataset)
         else:
@@ -435,18 +448,23 @@ def main():
         "revision": model_args.model_revision,
         "use_auth_token": True if model_args.use_auth_token else None,
     }
-    if model_args.config_name:
-        config = AutoConfig.from_pretrained(model_args.config_name)
-    # option to load pretrained tokenizer, but not pretrained model
-    elif model_args.model_name_or_path and model_args.rand_init_weights is False:
-        config = AutoConfig.from_pretrained(model_args.model_name_or_path)
-    elif model_args.rand_init_weights is True:
-        config = CONFIG_MAPPING[model_args.model_type]()
-        logger.warning("You are instantiating a new config instance from scratch.")
-        if model_args.config_overrides is not None:
-            logger.info(f"Overriding config: {model_args.config_overrides}")
-            config.update_from_string(model_args.config_overrides)
-            logger.info(f"New config: {config}")
+    if 'pythia' not in model_args.model_name_or_path:
+        if model_args.config_name:
+            config = AutoConfig.from_pretrained(model_args.config_name)
+        # option to load pretrained tokenizer, but not pretrained model
+        elif model_args.model_name_or_path and model_args.rand_init_weights is False:
+            config = AutoConfig.from_pretrained(model_args.model_name_or_path)
+        elif model_args.rand_init_weights is True:
+            config = CONFIG_MAPPING[model_args.model_type]()
+            logger.warning("You are instantiating a new config instance from scratch.")
+            if model_args.config_overrides is not None:
+                logger.info(f"Overriding config: {model_args.config_overrides}")
+                config.update_from_string(model_args.config_overrides)
+                logger.info(f"New config: {config}")
+    else:
+        config = GPTNeoXConfig.from_pretrained(model_args.model_name_or_path,
+                                               use_cache=False)
+        logger.info(f"GPT NEO X config: {config}")
 
     tokenizer_kwargs = {
         "cache_dir": model_args.cache_dir,
@@ -463,28 +481,41 @@ def main():
             "You are instantiating a new tokenizer from scratch. This is not supported by this script."
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
+    if "pythia" in model_args.model_name_or_path:
+        if model_args.rand_init_weights is False:
+            model = GPTNeoXForCausalLM.from_pretrained(
+                model_args.model_name_or_path,
+                use_cache=False
+            )
+            print(f"-- n_params: {sum(p.numel() for p in model.parameters())} ----")
+        elif model_args.rand_init_weights is True:
+            print(config)
+            model = AutoModelForCausalLM.from_config(config)
+            n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
+            logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 
-    if model_args.model_name_or_path and model_args.rand_init_weights is False:
-        torch_dtype = (
-            model_args.torch_dtype
-            if model_args.torch_dtype in ["auto", None]
-            else getattr(torch, model_args.torch_dtype)
-        )
-        model = AutoModelForCausalLM.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=config,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            use_auth_token=True if model_args.use_auth_token else None,
-            torch_dtype=torch_dtype,
-            low_cpu_mem_usage=model_args.low_cpu_mem_usage,
-            ignore_mismatched_sizes=True
-        )
-    elif model_args.rand_init_weights is True:
-        model = AutoModelForCausalLM.from_config(config)
-        n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
-        logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
+    else:
+        if model_args.model_name_or_path and model_args.rand_init_weights is False:
+            torch_dtype = (
+                model_args.torch_dtype
+                if model_args.torch_dtype in ["auto", None]
+                else getattr(torch, model_args.torch_dtype)
+            )
+            model = AutoModelForCausalLM.from_pretrained(
+                model_args.model_name_or_path,
+                from_tf=bool(".ckpt" in model_args.model_name_or_path),
+                config=config,
+                cache_dir=model_args.cache_dir,
+                revision=model_args.model_revision,
+                use_auth_token=True if model_args.use_auth_token else None,
+                torch_dtype=torch_dtype,
+                low_cpu_mem_usage=model_args.low_cpu_mem_usage,
+                ignore_mismatched_sizes=True
+            )
+        elif model_args.rand_init_weights is True:
+            model = AutoModelForCausalLM.from_config(config)
+            n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
+            logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
@@ -494,12 +525,31 @@ def main():
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
-    if training_args.do_train:
-        column_names = list(raw_datasets["train"].features)
+    text_column_name = "text"
+    if 'train' in raw_datasets.keys():
+        train_column_names = list(raw_datasets["train"].features)
+        raw_datasets["train"] = raw_datasets["train"].remove_columns([col for col in raw_datasets["train"].column_names if col != text_column_name])
     else:
-        column_names = list(raw_datasets["validation"].features)
-    text_column_name = "text" if "text" in column_names else column_names[0]
-
+        raise ValueError("Train dataset not found in raw_datasets.")
+    if 'validation' in raw_datasets.keys():
+        val_ds = raw_datasets["validation"]
+        if isinstance(val_ds, datasets.dataset_dict.DatasetDict):
+            validation_column_names = list(raw_datasets["validation"][list(val_ds.keys())[0]].features)
+            # Ensure 'validation' datasets have only the columns that are present in the train datasets
+            validation_column_names = [col for col in validation_column_names if col in train_column_names]
+            for key in val_ds:
+                if text_column_name not in raw_datasets["validation"][key].column_names:
+                    raise ValueError(f"Column {text_column_name} not found in validation dataset {key}.")
+                raw_datasets["validation"][key] = raw_datasets["validation"][key].remove_columns([col for col in raw_datasets["validation"][key].column_names if col != text_column_name])
+        else:
+            validation_column_names = list(raw_datasets["validation"].features)
+            # Ensure 'validation' datasets have only the columns that are present in the train datasets
+            validation_column_names = [col for col in validation_column_names if col in train_column_names]
+            if text_column_name not in raw_datasets["validation"].column_names:
+                raise ValueError(f"Column {text_column_name} not found in validation dataset.")
+            raw_datasets["validation"] = raw_datasets["validation"].remove_columns([col for col in raw_datasets["validation"].column_names  if col != text_column_name])
+    else:
+        raise ValueError("Validation dataset not found in raw_datasets.")
     # since this will be pickled to avoid _LazyModule error in Hasher force logger loading before tokenize_function
     tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
 
@@ -514,13 +564,35 @@ def main():
             )
         return output
 
-    with training_args.main_process_first(desc="dataset map tokenization"):
+    # n_samples = 200
+    # raw_datasets['train'] = raw_datasets['train'].select(range(10000))
+    # for key in raw_datasets['validation']:
+    #     n_samples = min(n_samples, len(raw_datasets['validation'][key]))
+    #     raw_datasets['validation'][key] = raw_datasets['validation'][key].select(range(n_samples))
+
+    if isinstance(raw_datasets, datasets.dataset_dict.DatasetDict):
+        if not data_args.streaming:
+            tokenized_datasets = {x: raw_datasets[x].map(
+                tokenize_function,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                remove_columns=['text'],
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="Running tokenizer on dataset",
+            ) for x in raw_datasets}
+        else:
+            tokenized_datasets = {x: raw_datasets[x].map(
+                tokenize_function,
+                batched=True,
+                remove_columns=['text'],
+            ) for x in raw_datasets}
+    else:
         if not data_args.streaming:
             tokenized_datasets = raw_datasets.map(
                 tokenize_function,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
-                remove_columns=column_names,
+                remove_columns=['text'],
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Running tokenizer on dataset",
             )
@@ -528,9 +600,9 @@ def main():
             tokenized_datasets = raw_datasets.map(
                 tokenize_function,
                 batched=True,
-                remove_columns=column_names,
+                remove_columns=['text'],
             )
-
+    
         if data_args.count_tokens:
             token_counts = {}
             for key in tokenized_datasets:
@@ -558,6 +630,17 @@ def main():
                 json.dump(token_counts, f)
             logger.info(f"Saved tokenized datasets to {save_path}")
             exit()
+        
+    print(tokenized_datasets)
+
+
+    # # DEBUG
+    # # convert tokenized dataset to datasetdict
+    # if isinstance(tokenized_datasets, dict):
+    #     tokenized_datasets = DatasetDict(tokenized_datasets)
+    # # saved tokenized datasets to disk
+    # tokenized_datasets.save_to_disk("task_ds_tokenized")
+    # exit()
 
     if data_args.block_size is None:
         block_size = tokenizer.model_max_length
@@ -585,10 +668,12 @@ def main():
         # We could add padding if the model supported it instead of this drop, you can customize this part to your needs.
         total_length = (total_length // block_size) * block_size
         # Split by chunks of max_len.
+        assert total_length != 0, f"total_length is 0, {len(concatenated_examples[list(examples.keys())[0]])}"
         result = {
             k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
             for k, t in concatenated_examples.items()
         }
+        # Remove any example whose input_ids seem to be empty lists
         result["labels"] = result["input_ids"].copy()
         return result
 
@@ -598,22 +683,50 @@ def main():
     #
     # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
     # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
-
     with training_args.main_process_first(desc="grouping texts together"):
-        if not data_args.streaming:
-            lm_datasets = tokenized_datasets.map(
-                group_texts,
-                batched=True,
-                num_proc=data_args.preprocessing_num_workers,
-                load_from_cache_file=not data_args.overwrite_cache,
-                desc=f"Grouping texts in chunks of {block_size}",
-            )
+        if isinstance(tokenized_datasets, dict) or isinstance(tokenized_datasets, datasets.dataset_dict.DatasetDict):
+            if not data_args.streaming:
+                lm_datasets = {x: tokenized_datasets[x].map(
+                    group_texts,
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc=f"Grouping texts in chunks of {block_size}",
+                ) for x in tokenized_datasets}
+                # Assert that all 'input_ids' are the same length as block_size
+                # for dataset in lm_datasets.values():
+                #     for example in dataset:
+                #         # assert len(example) == block_size, "All 'input_ids' should be the same length as block_size"
+                #         if example['input_ids'] != block_size:
+                #             # discard examples that are not block_size
+                #             print(f"Discarding example: {example}")
+                #             dataset.remove(example)
+                # Filter out examples that are not block_size
+                # for key in lm_datasets.keys():
+                #     lm_datasets[key] = lm_datasets[key].filter(lambda example: len(example['input_ids']) == block_size if len(example['input_ids']) == block_size else print(f"Dropped example: {example}"))
+            else:
+                lm_datasets = {x: tokenized_datasets[x].map(
+                    group_texts,
+                    batched=True,
+                ) for x in tokenized_datasets} 
         else:
-            lm_datasets = tokenized_datasets.map(
-                group_texts,
-                batched=True,
-            )
+            if not data_args.streaming:
+                lm_datasets = tokenized_datasets.map(
+                    group_texts,
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc=f"Grouping texts in chunks of {block_size}",
+                )
+            else:
+                lm_datasets = tokenized_datasets.map(
+                    group_texts,
+                    batched=True,
+                )
+        if data_args.tokenize_only:
+            exit()
 
+    
     if training_args.do_train:
         if "train" not in tokenized_datasets:
             raise ValueError("--do_train requires a train dataset")
@@ -677,8 +790,7 @@ def main():
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
-        report_to="wandb",
-        # Data collator will default to DataCollatorWithPadding, so we change it.
+        callbacks=[CustomWandbCallback(alert_step=training_args.report_every)] if training_args.report_to == 'wandb' else None,
         data_collator=default_data_collator,
         compute_metrics=compute_metrics if training_args.do_eval and not is_torch_tpu_available() else None,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics
@@ -708,22 +820,22 @@ def main():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
-    # Evaluation
-    if training_args.do_eval:
-        logger.info("*** Evaluate ***")
+    # # Evaluation
+    # if training_args.do_eval:
+    #     logger.info("*** Evaluate ***")
 
-        metrics = trainer.evaluate()
+    #     metrics = trainer.evaluate()
 
-        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
-        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
-        try:
-            perplexity = math.exp(metrics["eval_loss"])
-        except OverflowError:
-            perplexity = float("inf")
-        metrics["perplexity"] = perplexity
+    #     max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
+    #     metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
+    #     try:
+    #         perplexity = math.exp(metrics["eval_loss"])
+    #     except OverflowError:
+    #         perplexity = float("inf")
+    #     metrics["perplexity"] = perplexity
 
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
+    #     trainer.log_metrics("eval", metrics)
+    #     trainer.save_metrics("eval", metrics)
 
     kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-generation"}
     if data_args.dataset_name is not None:

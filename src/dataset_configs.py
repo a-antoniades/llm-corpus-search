@@ -385,6 +385,119 @@ class DatasetConfig:
                     'max_examples': 3001124
                 }
 
+            ],
+
+            'NLI_2': [
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'snli',
+                    'dataset_config_name': None,
+                    'p': self.P_QA,
+                    'validation_split': 'test',
+                    'promptsource': self.PROMPTSOURCE,
+                    'columns': {'premise': 'premise:', 'hypothesis': 'hypothesis:', 'label': NLI_PROMPT},
+                    'mapping': {'label': {"0": 'entailment',
+                                            "1": 'neutral',
+                                            "2": 'contradiction'}},
+                },
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'glue',
+                    'dataset_config_name': 'wnli',
+                    'p': self.P_QA,
+                    'validation_split': 'train',
+                    'promptsource': self.PROMPTSOURCE,
+                    'columns': {'sentence1': 'sentence1', 'sentence2': 'sentence2', 'label': NLI_PROMPT_BINARY},
+                    'mapping': {'label': {"0": 'non-entailment',
+                                          "1": 'entailment'}},
+                },
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'glue',
+                    'dataset_config_name': 'rte',
+                    'p': self.P_QA,
+                    'train_split': 'train',
+                    'promptsource': self.PROMPTSOURCE,
+                    'columns': {'sentence1': 'sentence1', 'sentence2': 'sentence2', 'label': NLI_PROMPT_BINARY},
+                    'mapping': {'label': {"0": 'entailment',
+                                            "1": 'non-entailment'}},
+                },
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'multi_nli',
+                    'dataset_config_name': None,
+                    'p': 1,
+                    'train_split': 'train',
+                    'promptsource': self.PROMPTSOURCE,
+                    'columns': {'premise': 'premise:', 'hypothesis': 'hypothesis:', 'label': NLI_PROMPT},
+                    'mapping': {'label': {"0": 'entailment',
+                                            "1": 'neutral',
+                                            "2": 'contradiction'}}
+                },
+                {
+                    'dataset_type': 'text',
+                    'dataset_name': 'c4',
+                    'dataset_config_name': 'en',
+                    'path': "/share/edc/home/antonis/datasets/huggingface/merged_datasets/sentiment_c4/P_1_PQA_5_promptsource_True/dataset_0/dataset_train.arrow",
+                    # 'path': '/share/edc/home/antonis/datasets/huggingface/merged_datasets/sentiment_unified_labels/P_1_PQA_5_promptsource_False/dataset_0/dataset_train.arrow',
+                    'p': self.P,
+                    'train_split': "train[:20%]",
+                    'max_examples': 3001124
+                }
+
+            ],
+
+
+        'NLI_eval': [
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'snli',
+                    'dataset_config_name': None,
+                    'p': self.P_QA,
+                    'validation_split': 'test',
+                    'columns': {'premise': 'premise:', 'hypothesis': 'hypothesis:', 'label': NLI_PROMPT},
+                    'mapping': {'label': {"0": 'entailment',
+                                            "1": 'neutral',
+                                            "2": 'contradiction'}},
+                },
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'glue',
+                    'dataset_config_name': 'rte',
+                    'p': self.P_QA,
+                    'validation_split': 'validation',
+                    'columns': {'sentence1': 'sentence1', 'sentence2': 'sentence2', 'label': NLI_PROMPT_BINARY},
+                    'mapping': {'label': {"0": 'entailment',
+                                            "1": 'non-entailment'}},
+                },
+
+            ],
+
+        'NLI_eval_2': [
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'multi_nli',
+                    'dataset_config_name': None,
+                    'p': self.P_QA,
+                    'promptsource': self.PROMPTSOURCE,
+                    'validation_split': 'validation_matched',
+                    'columns': {'premise': 'premise:', 'hypothesis': 'hypothesis:', 'label': NLI_PROMPT},
+                    'mapping': {'label': {"0": 'entailment',
+                                            "1": 'neutral',
+                                            "2": 'contradiction'}}
+                },
+                {
+                    'dataset_type': 'QA',
+                    'dataset_name': 'glue',
+                    'dataset_config_name': 'rte',
+                    'p': self.P_QA,
+                    'promptsource': self.PROMPTSOURCE,
+                    'validation_split': 'validation',
+                    'columns': {'sentence1': 'sentence1', 'sentence2': 'sentence2', 'label': NLI_PROMPT_BINARY},
+                    'mapping': {'label': {"0": 'entailment',
+                                            "1": 'non-entailment'}},
+                },
+
             ]
 
 

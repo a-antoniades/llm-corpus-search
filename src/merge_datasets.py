@@ -7,7 +7,7 @@ from datasets import concatenate_datasets
 from datasets import DatasetDict
 from transformers import set_seed
 
-# from promptsource.templates import DatasetTemplates, TemplateCollection
+from promptsource.templates import DatasetTemplates, TemplateCollection
 
 import random
 import numpy as np
@@ -89,8 +89,10 @@ def sample_split(dataset, proportion, max_examples=None):
     
     return sampled_dataset
 
-def remove_redundant_columns(dataset, column_to_keep='text'):
-    columns_not_keep = set(dataset.column_names) - set([column_to_keep])
+def remove_redundant_columns(dataset, columns_to_keep=['text']):
+    if isinstance(columns_to_keep, str):
+        columns_to_keep = [columns_to_keep]
+    columns_not_keep = set(dataset.column_names) - set(columns_to_keep)
     dataset = dataset.remove_columns(columns_not_keep)
     return dataset
 
@@ -102,22 +104,36 @@ def concatenate_columns(dataset, columns, new_col_name=NEW_COL_NAME):
 
     return remove_redundant_columns(dataset, new_col_name)
 
-def to_promptsource(dataset, templates, new_col_name=NEW_COL_NAME):
+def to_promptsource(dataset, templates, is_validation=False, new_col_name=NEW_COL_NAME):
     print(f"Converting to promptsouce with templates: {templates}")
     
-    def apply_template(example, template, new_col_name=NEW_COL_NAME):
+    def apply_template(example, template, is_validation=False, new_col_name=NEW_COL_NAME):
         if isinstance(template, list):
             template = random.choice(template)
-        return {new_col_name: template.apply(example)}
+        if is_validation:
+            prompt, answer = template.apply(example)
+            return {
+                new_col_name: prompt,
+                'answer_choices': template.answer_choices,
+                'answer': answer
+                }
+        else:
+            return {
+                new_col_name: template.apply(example),
+                'answer_choices': template.answer_choices
+                }
     
-    prompted_dataset = dataset.map(lambda example: apply_template(example, templates, new_col_name=new_col_name))
+    prompted_dataset = dataset.map(lambda example: apply_template(example, templates,
+                                                                  is_validation, new_col_name=new_col_name))
 
     # if column is list of lists, make into list of strings
-    if isinstance(prompted_dataset[new_col_name][0], list):
+    if isinstance(prompted_dataset[new_col_name][0], list) and not is_validation:
         prompted_dataset = prompted_dataset.map(lambda example: {new_col_name: ' '.join(example[new_col_name])})
+        prompted_dataset = remove_redundant_columns(prompted_dataset, new_col_name)
+    elif is_validation:
+        prompted_dataset = remove_redundant_columns(prompted_dataset, [new_col_name, 'answer_choices', 'answer'])
 
-    # keep only the new column
-    return remove_redundant_columns(prompted_dataset, new_col_name)
+    return prompted_dataset
     
 
 def map_labels(dataset, label_mapping, column_mapping):
@@ -155,7 +171,7 @@ def map_labels(dataset, label_mapping, column_mapping):
     dataset = concatenate_columns(dataset, columns=column_mapping, new_col_name=NEW_COL_NAME)
 
     # remove the original label column
-    dataset = remove_redundant_columns(dataset, column_to_keep=NEW_COL_NAME)
+    dataset = remove_redundant_columns(dataset, columns_to_keep=[NEW_COL_NAME])
 
     return dataset
 
@@ -181,6 +197,8 @@ def load_and_sample_dataset(dataset_config, cache_dir):
     def process_dataset(dataset, dataset_name, dataset_config_name, 
                         is_promptsource, proportion, column_mapping, label_mapping, dataset_config):
 
+        is_validation = dataset_config.get('validation_split', False) != False
+
         if label_mapping is not None:
             mapping_labels = set(label_mapping['label'].keys())
             print(f"mapping_labels: {mapping_labels}")
@@ -201,14 +219,10 @@ def load_and_sample_dataset(dataset_config, cache_dir):
 
         # convert text to promptsource
         if is_promptsource:
-            # try:
             templates = [template for id, template in DatasetTemplates(dataset_name, dataset_config_name).templates.items()]
             print(f"Dataset {dataset_name}, has templates, applying promptsouce")
-            processed_dataset = to_promptsource(processed_dataset, templates)
-            # except:
-            #     print(f"Dataset {dataset_name} does not have templates, skipping promptsouce")
-            #     assert columns is not None, "If dataset is not a promptsource, columns must be specified"
-            #     processed_dataset = concatenate_columns(processed_dataset, columns)
+            processed_dataset = to_promptsource(processed_dataset, templates, is_validation)
+
         elif column_mapping is not None:
             if isinstance(column_mapping, dict):
                 columns = list(column_mapping.keys())
@@ -359,16 +373,12 @@ def merge_datasets(dataset_configs, pack_qa: Optional[int] = None, cache_dir: Op
                                                 is greater than the number of examples in the dataset ({len(ds)})."
             # Randomly select indices to remove
             indices_to_remove = np.random.choice(len(ds), n_examples_remove, replace=False)
-            print("done")
             # Create a boolean array representing whether each index should be kept
             mask = np.ones(len(ds), dtype=bool)
             mask[indices_to_remove] = False
-            print("done2")
             # Get the indices to keep
             indices_to_keep = np.arange(len(ds))[mask]
-            print("done3")
             sampled_text_train_datasets.append(ds.select(indices_to_keep))
-            print("done4")
     
     # random pack QA dataset examples
     if pack_qa is not None:
@@ -380,15 +390,16 @@ def merge_datasets(dataset_configs, pack_qa: Optional[int] = None, cache_dir: Op
         datasets_by_type['train']['QA'] = packed_qa_train_datasets
 
     # Concatenate datasets
-    concatenated_train = concatenate_datasets(datasets_by_type['train']['QA'] + sampled_text_train_datasets)
-    concatenated_validation = concatenate_datasets(datasets_by_type['validation'])
-    print("done5")
+    train_sets = datasets_by_type['train']['QA'] + sampled_text_train_datasets
+    val_sets = datasets_by_type['validation']
+    concatenated_train = concatenate_datasets(train_sets) if len(train_sets) > 0 else None
+    concatenated_validation = concatenate_datasets(val_sets) if len(val_sets) > 0 else None
+    
     # Convert to HuggingFace datasets
     raw_datasets = { 
         'train': concatenated_train, 
         'validation': concatenated_validation
     }
-    print("done6")
 
     return raw_datasets
 
@@ -396,12 +407,13 @@ def merge_datasets(dataset_configs, pack_qa: Optional[int] = None, cache_dir: Op
 if __name__ == "__main__":
     CACHE_DIR = "/share/edc/home/antonis/datasets/huggingface"
     DATASET_DIR = os.path.join(CACHE_DIR, "merged_datasets")
-    DATASET_TYPE = "NLI"
-    P_QA = 0.1
+    DATASET_TYPE = "NLI_eval_2"
+    P_QA = 1
     P = 1
     QA_PACKING = 1
-    PROMPTSOURCE = False
+    PROMPTSOURCE = True
     MAP_COLS = False
+    SKIP_SPLIT = None
     
     # Define dataset configurations
     from dataset_configs import DatasetConfig
@@ -419,10 +431,11 @@ if __name__ == "__main__":
         os.makedirs(ds_folder)
     n_folders = len(os.listdir(DATASET_DIR))
     for split in merged_datasets.keys():
-        if split == 'validation':
-            print(f"skipping validation split to {ds_folder}...")
+        if split == SKIP_SPLIT or merged_datasets[split] is None:
+            print(f"skipping {SKIP_SPLIT}")
             continue
-        merged_datasets[split].save_to_disk(os.path.join(ds_folder, f"dataset_{split}.arrow"))
+        else:
+            merged_datasets[split].save_to_disk(os.path.join(ds_folder, f"dataset_{split}.arrow"))
     # save config
     with open(os.path.join(ds_folder, "config.json"), 'w') as f:
         json.dump(dataset_config, f)

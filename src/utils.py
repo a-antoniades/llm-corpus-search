@@ -1,5 +1,5 @@
 import os
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, GPT2Tokenizer
 from datasets import load_dataset
 import multiprocessing
 from tqdm import tqdm
@@ -58,3 +58,25 @@ def filter_path(path, keywords):
         if len(filtered_parts) == len(keywords):
             break
     return os.sep.join(filtered_parts)
+
+
+def concatenate_columns(dataset, column1, column2, new_column_name):
+    def concat_example(example):
+        example[new_column_name] = example[column1] + " " + example[column2]
+        return example
+
+    return dataset.map(concat_example)
+
+def total_tokens(dataset, text_field):
+    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+    total_count = 0
+    
+    for example in tqdm(dataset, desc="Counting tokens"):
+        text = example[text_field]
+        tokens = tokenizer.tokenize(text)
+        total_count += len(tokens)
+
+    # Print the total count in scientific notation
+    print(f"Total number of tokens: {total_count:.2e}")
+
+    return f"{total_count:.2e}"
