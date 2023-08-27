@@ -1,5 +1,5 @@
 # FIRST TOKENIZE DATASET
-DATASET="/share/edc/home/antonis/datasets/huggingface/flan_v1/ds_c4_small"
+DATASET="/share/edc/home/antonis/datasets/huggingface/flan_v1/c4_mixed_QA"
 VALIDATION_DATASET='/share/edc/home/antonis/datasets/huggingface/flan_v1_task_ds_n_5000'
 DATASET_TYPE=$(echo "$DATASET" | awk -F/ '{print $(NF-1) "/" $NF}')
 WANDB_MODE="dryrun"
@@ -41,11 +41,11 @@ python train_gpt.py \
    --report_every 50000
 
 
-# TRAIN ON TOKENIZED DATASET (LARGE + SMALL MODEL)
+# TRAIN ON TOKENIZED DATASET (LARGE MODEL)
 # REMEMBER: Batch size = 240. (3 * 8 GPUS * 10 Grad accum steps)
 models=(
     "EleutherAI/pythia-1.4B-deduped"
-    "EleutherAI/pythia-160M-deduped"
+    # "EleutherAI/pythia-160M-deduped"
 )
 
 for MODEL_NAME in "${models[@]}"
