@@ -80,7 +80,7 @@ export ANSWER_CHOICES=("entailment" "contradiction" "neutral", "non-entailment")
 for MODEL in "${models[@]}"
 do
     echo "Running for model: $MODEL"
-    python generate.py \
+    python ../generate.py \
         --model_name_or_path "$MODEL" \
         --dataset_path $DATASET_PATH \
         --num_samples $NUM_SAMPLES \

@@ -16,7 +16,7 @@ do
     export CUDA_VISIBLE_DEVICES=2,3,4
     export OMP_NUM_THREADS=8
     torchrun --rdzv_backend c10d --rdzv_endpoint localhost:0 --nproc_per_node 3 \
-    train_gpt.py \
+    ../train_gpt.py \
        --count_tokens False \
        --model_type pythia \
        --model_name_or_path $MODEL_NAME \

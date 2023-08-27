@@ -140,7 +140,7 @@ MODEL_NAME="EleutherAI/pythia-1.4B-deduped"
 EXP_PATH="./models/pythia/scrap"
 export CUDA_VISIBLE_DEVICES=0
 export OMP_NUM_THREADS=32
-python train_gpt.py \
+python ../train_gpt.py \
    --count_tokens False \
    --model_type pythia \
    --model_name_or_path $MODEL_NAME \
@@ -182,7 +182,7 @@ EXP_PATH="./models/pythia/experiment_1"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export OMP_NUM_THREADS=8
 torchrun --rdzv_backend c10d --rdzv_endpoint localhost:0 --nproc_per_node 8 \
-train_gpt.py \
+../train_gpt.py \
    --count_tokens False \
    --model_type pythia \
    --model_name_or_path $MODEL_NAME \

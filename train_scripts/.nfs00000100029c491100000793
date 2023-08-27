@@ -140,7 +140,7 @@ MODEL_NAME="EleutherAI/pythia-1.4B-deduped"
 EXP_PATH="./models/pythia/scrap"
 export OMP_NUM_THREADS=32
 export CUDA_VISIBLE_DEVICES=0
-python train_gpt.py \
+python ../train_gpt.py \
    --count_tokens False \
    --model_type pythia \
    --model_name_or_path $MODEL_NAME \
@@ -167,7 +167,6 @@ python train_gpt.py \
    --dataset_dir $DATASET \
    --validation_dataset $VALIDATION_DATASET \
    --tokenize_only \
-   --overwrite_cache \
    --wandb_mode $WANDB_MODE \
    --report_every 50000
    
