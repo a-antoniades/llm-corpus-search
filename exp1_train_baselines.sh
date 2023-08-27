@@ -9,7 +9,7 @@ MODEL_NAME="EleutherAI/pythia-1.4B-deduped"
 EXP_PATH="./models/pythia/scrap"
 export CUDA_VISIBLE_DEVICES=0
 export OMP_NUM_THREADS=32
-python ../train_gpt.py \
+python train_gpt.py \
    --count_tokens False \
    --model_type pythia \
    --model_name_or_path $MODEL_NAME \

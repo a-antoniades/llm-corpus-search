@@ -15,7 +15,7 @@ do
     EXP_PATH="./models/pythia/experiment_1"
     export CUDA_VISIBLE_DEVICES=2,3,4,5,6,7
     export OMP_NUM_THREADS=8
-    python ../train_gpt.py \
+    python train_gpt.py \
        --count_tokens False \
        --model_type pythia \
        --model_name_or_path $MODEL_NAME \
@@ -57,7 +57,7 @@ do
     export CUDA_VISIBLE_DEVICES=2,3,4,5,6,7
     export OMP_NUM_THREADS=8
     torchrun --rdzv_backend c10d --rdzv_endpoint localhost:0 --nproc_per_node 6 \
-    ../train_gpt.py \
+    train_gpt.py \
        --count_tokens False \
        --model_type pythia \
        --model_name_or_path $MODEL_NAME \
