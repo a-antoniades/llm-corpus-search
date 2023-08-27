@@ -50,7 +50,7 @@ models=(
 
 for MODEL_NAME in "${models[@]}"
 do
-   DATASET="/share/edc/home/antonis/datasets/huggingface/flan_v1/c4_mixed_NLI"
+   DATASET="/share/edc/home/antonis/datasets/huggingface/flan_v1/c4_mixed_QA"
    VALIDATION_DATASET='/share/edc/home/antonis/datasets/huggingface/flan_v1_task_ds_n_5000'
    DATASET_TYPE=$(echo "$DATASET" | awk -F/ '{print $(NF-1) "/" $NF}')
    WANDB_MODE="run"
