@@ -495,10 +495,25 @@ class DatasetConfig:
                     'validation_split': 'validation',
                     'columns': {'sentence1': 'sentence1', 'sentence2': 'sentence2', 'label': NLI_PROMPT_BINARY},
                     'mapping': {'label': {"0": 'entailment',
-                                            "1": 'non-entailment'}},
+                                          "1": 'non-entailment'}},
                 },
 
-            ]
+            ],
+
+        "Commonsense": [
+            {
+                'dataset_type': 'QA',
+                'dataset_name': 'hellaswag',
+                'dataset_config_name': None,
+                'p': self.P_QA,
+                'promptsource': self.PROMPTSOURCE,
+                'validation_split': 'validation',
+                'columns': {'ctx_a': 'ctx_a', 'ctx_b': 'ctx_b', 'endings': 'endings', 'label': 'label'}
+            },
+            {
+                
+            }
+        ]
 
 
         }

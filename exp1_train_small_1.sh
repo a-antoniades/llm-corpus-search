@@ -1,6 +1,7 @@
 datasets=(
-    "/share/edc/home/antonis/datasets/huggingface/flan_v1/c4_mixed_QA"
-    "/share/edc/home/antonis/datasets/huggingface/flan_v1/c4_mixed_Commonsense"
+    # "/share/edc/home/antonis/datasets/huggingface/flan_v1/c4_mixed_QA"
+    # "/share/edc/home/antonis/datasets/huggingface/flan_v1/c4_mixed_Commonsense"
+
 )
 
 # iterate over each dataset
@@ -13,7 +14,7 @@ do
     REPORT_TO="wandb"
     MODEL_NAME="EleutherAI/pythia-160M-deduped"
     EXP_PATH="./models/pythia/experiment_1"
-    export CUDA_VISIBLE_DEVICES=2,3,4,5,6,7
+    export CUDA_VISIBLE_DEVICES=2
     export OMP_NUM_THREADS=8
     python train_gpt.py \
        --count_tokens False \
@@ -43,7 +44,6 @@ do
        --validation_dataset $VALIDATION_DATASET \
        --report_every 50000 \
        --tokenize_only \
-       --overwrite_cache \
        --wandb_mode $WANDB_MODE \
        --report_to $REPORT_TO
 

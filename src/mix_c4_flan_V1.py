@@ -53,42 +53,43 @@ class FLAN_V1_DATASET:
             
         }
 
+if __name__ == "__main__":
 
-parser = argparse.ArgumentParser(description='Process a specific task.')
-parser.add_argument('--task', type=str, required=True, help='The task to process (e.g. "NLI").')
-args = parser.parse_args()
+    parser = argparse.ArgumentParser(description='Process a specific task.')
+    parser.add_argument('--task', type=str, required=True, help='The task to process (e.g. "NLI").')
+    args = parser.parse_args()
 
-TASK = args.task
+    TASK = args.task
 
-# Validate the task
-if TASK not in FLAN_V1_DATASET().tasks:
-    raise ValueError(f"Task {TASK} is not recognized. Please choose from {list(FLAN_V1_DATASET().tasks.keys())}.")
+    # Validate the task
+    if TASK not in FLAN_V1_DATASET().tasks:
+        raise ValueError(f"Task {TASK} is not recognized. Please choose from {list(FLAN_V1_DATASET().tasks.keys())}.")
 
-# %%
-task_ds = filter_and_check(FLAN_V1_DATASET().ds, FLAN_V1_DATASET().tasks[TASK])
-task_ds = concatenate_columns(task_ds, 'inputs', 'targets', 'text')
-task_tokens = total_tokens(task_ds, 'text')
+    # %%
+    task_ds = filter_and_check(FLAN_V1_DATASET().ds, FLAN_V1_DATASET().tasks[TASK])
+    task_ds = concatenate_columns(task_ds, 'inputs', 'targets', 'text')
+    task_tokens = total_tokens(task_ds, 'text')
 
-# %%
-ds_c4 = load_dataset("c4", "en", split="train", cache_dir=CACHE_DIR)
-ds_c4_small = sample_dataset(ds_c4, len(ds_c4) // 10)
+    # %%
+    ds_c4 = load_dataset("c4", "en", split="train", cache_dir=CACHE_DIR)
+    ds_c4_small = sample_dataset(ds_c4, len(ds_c4) // 10)
 
-# %%
-n_samples_keep = len(ds_c4_small) - len(task_ds)
-ds_c4_sampled = sample_dataset(ds_c4_small, n_samples_keep)
-ds_c4_mixed = concatenate_datasets([ds_c4_sampled, task_ds])
+    # %%
+    n_samples_keep = len(ds_c4_small) - len(task_ds)
+    ds_c4_sampled = sample_dataset(ds_c4_small, n_samples_keep)
+    ds_c4_mixed = concatenate_datasets([ds_c4_sampled, task_ds])
 
-# %%
-base_path = os.path.join(CACHE_DIR, "flan_v1")
-if not os.path.exists(base_path):
-    os.mkdir(base_path)
+    # %%
+    base_path = os.path.join(CACHE_DIR, "flan_v1")
+    if not os.path.exists(base_path):
+        os.mkdir(base_path)
 
-ds_path = os.path.join(base_path, f"c4_mixed_{TASK}")
+    ds_path = os.path.join(base_path, f"c4_mixed_{TASK}")
 
-ds_c4_mixed.save_to_disk(ds_path)
-# save num_tokens
-with open(os.path.join(base_path, f"task_tokens.txt"), "w") as f:
-    f.write(str(task_tokens))
+    ds_c4_mixed.save_to_disk(ds_path)
+    # save num_tokens
+    with open(os.path.join(base_path, f"task_tokens.txt"), "w") as f:
+        f.write(str(task_tokens))
 
-print(f"Saved {TASK} mixed dataset to {os.path.join(base_path, f'c4_mixed_{TASK}')}")
-print(f"len dataset: {len(ds_c4_mixed)}")
+    print(f"Saved {TASK} mixed dataset to {os.path.join(base_path, f'c4_mixed_{TASK}')}")
+    print(f"len dataset: {len(ds_c4_mixed)}")

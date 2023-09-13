@@ -3,6 +3,7 @@ from transformers import AutoTokenizer, GPT2Tokenizer
 from datasets import load_dataset
 import multiprocessing
 from tqdm import tqdm
+from transformers import GPT2Tokenizer
 
 def count_tokens_in_example(example):
     # Note that the function now operates on a single example, not a batch
@@ -19,6 +20,33 @@ def count_tokens(dataset):
 
     return total_tokens
 
+def count_gpt2_tokens(dataset, text_column):
+    """
+    Tokenize a Hugging Face Dataset using GPT-2 tokenizer and count the total number of tokens.
+
+    Parameters:
+    dataset (datasets.Dataset): Hugging Face Dataset to tokenize.
+    text_column (str): Name of the column in the dataset that contains the text to tokenize.
+
+    Returns:
+    int: Total number of tokens.
+    """
+
+    # Load pre-trained GPT-2 tokenizer
+    tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+
+    # Define a function to tokenize each example and return the number of tokens
+    def count_tokens(example):
+        tokens = tokenizer.encode(example[text_column], truncation=True)
+        return {"num_tokens": len(tokens)}
+
+    # Map the count_tokens function to the dataset
+    dataset = dataset.map(count_tokens, remove_columns=dataset.column_names)
+
+    # Sum the num_tokens column to get the total number of tokens
+    num_tokens = sum(dataset['num_tokens'])
+
+    return num_tokens
 
 def limit_total_tokens(tokenized_dataset, max_tokens):
     """

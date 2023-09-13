@@ -96,6 +96,7 @@ class ModelArguments:
                         "model_name_or_path. This is useful when you want to train a model from scratch."
                         "but use pretrained tokenizer"}
     )
+    resume: Optional[bool] = field(default=False, metadata={"help": "Resume training from checkpoint."})
     config_overrides: Optional[str] = field(
         default=None,
         metadata={
@@ -371,7 +372,7 @@ def main():
     training_args.run_name = MODEL_NAME.replace("/", "_")
     training_args.output_dir = os.path.join(training_args.output_dir, MODEL_NAME)
     last_checkpoint = None
-    if not model_args.rand_init_weights:
+    if not model_args.rand_init_weights or model_args.resume:
         if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
             last_checkpoint = get_last_checkpoint(training_args.output_dir)
             if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
