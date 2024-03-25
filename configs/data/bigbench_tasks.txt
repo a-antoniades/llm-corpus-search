@@ -1,0 +1,17 @@
+causal_judgment
+date_understanding
+disambiguation_qa
+dyck_languages
+formal_fallacies_syllogisms_negation
+geometric_shapes
+hyperbaton
+logical_deduction
+movie_recommendation
+navigate
+reasoning_about_colored_objects
+ruin_names
+salient_translation_error_detection
+snarks
+sports_understanding
+temporal_sequences
+tracking_shuffled_objects

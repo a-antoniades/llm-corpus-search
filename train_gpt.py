@@ -45,10 +45,12 @@ from transformers.utils.versions import require_version
 # ANTONIS
 from datetime import datetime
 import json
+from omegaconf import OmegaConf
 import wandb
 import numpy as np
 from sklearn.metrics import precision_recall_fscore_support
 import torch.distributed as dist
+from transformers import get_cosine_schedule_with_warmup
 from src.utils import count_tokens
 from src._trainer_callbacks import CustomWandbCallback, CustomEvaluationCallback
 
@@ -70,6 +72,52 @@ MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 from transformers import GPTNeoXForCausalLM, GPTNeoXConfig
 
+def calculate_batch_size(batch_size):
+    total_batch_size = 1024
+    # calculate batch size for each GPU
+    n_gpus = torch.cuda.device_count()
+    assert (total_batch_size % (n_gpus * batch_size)) == 0, "Total batch size must be divisible by num_gpus * train_micro_batch_size_per_gpu"
+    gradient_accumulation_steps = total_batch_size // (n_gpus * batch_size)
+    return batch_size
+
+
+def load_config(config_path):
+    with open(config_path, "r") as f:
+        config = OmegaConf.load(f)
+    return config
+
+def set_training_args(training_args, config):
+    paramer_names = [
+        'per_device_train',
+        'learning_rate',
+        'weight_decay',
+        
+        
+    ]
+
+class CustomTrainer(Trainer):
+    """
+    HF Trainer Wrapper to enforce a cosine lr with warmup
+    and a min_lr = 0.1 * max_lr
+    """
+    def create_optimizer_and_scheduler(self, num_training_steps: int):
+        super().create_optimizer_and_scheduler(num_training_steps)
+
+        # Create a cosine schedule with warmup
+        cosine_scheduler = get_cosine_schedule_with_warmup(
+            self.optimizer, 
+            num_warmup_steps=self.args.warmup_steps, 
+            num_training_steps=num_training_steps
+        )
+
+        # Create a custom scheduler that applies the cosine scheduler and enforces a minimum learning rate
+        def custom_scheduler(step):
+            lr = cosine_scheduler.get_last_lr()[0]
+            min_lr = 0.1 * self.args.learning_rate  # 0.01 times the maximum learning rate
+            return max(lr, min_lr)
+
+        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, custom_scheduler)
+            
 @dataclass
 class ModelArguments:
     """
@@ -258,8 +306,10 @@ class DataTrainingArguments:
         default=50000,
         metadata={"help": "Report training progress every X updates steps."},
     )
+    tconf_path: Optional[str] = field(default=None, metadata={"help": "The training config file (a yaml file)."})
     tokenize_only: Optional[bool] = field(default=False)
     wandb_mode: Optional[str] = field(default="run")
+
     # torch_compile: bool = field(
     #     default=False,
     #     metadata={"help": "Whether to compile the model using torch.jit.script or not."},
@@ -389,7 +439,7 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    os.environ["WANDB_PROJECT"] = "Incidental Supervision - experiment_1"
+    os.environ["WANDB_PROJECT"] = "Incidental Supervision - experiment_2"
     os.environ["WANDB_NAME"] = MODEL_NAME.replace("/", "_")
     # if torch.distributed.get_rank() == 0:
     #     wandb.init(project="Incidental Supervision", name=MODEL_NAME, config=vars(training_args),
@@ -634,7 +684,6 @@ def main():
         
     print(tokenized_datasets)
 
-
     # # DEBUG
     # # convert tokenized dataset to datasetdict
     # if isinstance(tokenized_datasets, dict):
@@ -644,14 +693,14 @@ def main():
     # exit()
 
     if data_args.block_size is None:
-        block_size = tokenizer.model_max_length
+        # block_size = tokenizer.model_max_length
+        block_size = 2048
         if block_size > 1024:
             logger.warning(
                 "The chosen tokenizer supports a `model_max_length` that is longer than the default `block_size` value"
                 " of 1024. If you would like to use a longer `block_size` up to `tokenizer.model_max_length` you can"
                 " override this default with `--block_size xxx`."
             )
-            block_size = 1024
     else:
         if data_args.block_size > tokenizer.model_max_length:
             logger.warning(
@@ -784,8 +833,23 @@ def main():
                 # "mauve": metric6.compute(predictions=decoded_preds, references=decoded_labels),
             }
 
+    # assert total batch size is correct
+    assert training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps != 240, "Total batch size must be 240"
     # Initialize our Trainer
-    trainer = Trainer(
+    if data_args.tconf_path is not None:
+        tconf = OmegaConf.load(data_args.tconf_path)
+        print(f"// Updating training args with {tconf} //")
+        # training_args = TrainingArguments(**tconf)
+        # Update the existing TrainingArguments instance
+        for key, value in tconf.items():
+            setattr(training_args, key, value)
+            # Set the minimum learning rate for the scheduler
+        if 'pythia' in model_args.model_name_or_path:
+            learning_rates = OmegaConf.load(os.path.join(os.path.dirname(data_args.tconf_path), "learning_rates.yml"))
+            tconf.learning_rate = learning_rates[model_args.model_name_or_path]
+
+
+    trainer = CustomTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
@@ -793,12 +857,17 @@ def main():
         tokenizer=tokenizer,
         callbacks=[CustomWandbCallback(alert_step=training_args.report_every)] if training_args.report_to == 'wandb' else None,
         data_collator=default_data_collator,
-        compute_metrics=compute_metrics if training_args.do_eval and not is_torch_tpu_available() else None,
+        # compute_metrics if training_args.do_eval and not is_torch_tpu_available() else None
+        compute_metrics=None,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics
         if training_args.do_eval and not is_torch_tpu_available()
         else None,
     )
-
+    # Set the minimum learning rate for the scheduler
+    if 'pythia' in model_args.model_name_or_path:
+        print("hi")
+        # print(f"// Setting min_lr to {tconf.learning_rate * 0.01} //")                                                                    
+        # trainer.lr_scheduler.min_lrs = [tconf.learning_rate * 0.01]  # replace 0.00001 with your desired min_lr
     # Training
     if training_args.do_train:
         checkpoint = None
@@ -821,22 +890,22 @@ def main():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
-    # # Evaluation
-    # if training_args.do_eval:
-    #     logger.info("*** Evaluate ***")
+    # Evaluation
+    if training_args.do_eval:
+        logger.info("*** Evaluate ***")
 
-    #     metrics = trainer.evaluate()
+        metrics = trainer.evaluate()
 
-    #     max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
-    #     metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
-    #     try:
-    #         perplexity = math.exp(metrics["eval_loss"])
-    #     except OverflowError:
-    #         perplexity = float("inf")
-    #     metrics["perplexity"] = perplexity
+        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
+        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
+        try:
+            perplexity = math.exp(metrics["eval_loss"])
+        except OverflowError:
+            perplexity = float("inf")
+        metrics["perplexity"] = perplexity
 
-    #     trainer.log_metrics("eval", metrics)
-    #     trainer.save_metrics("eval", metrics)
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
 
     kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-generation"}
     if data_args.dataset_name is not None:
@@ -847,10 +916,10 @@ def main():
         else:
             kwargs["dataset"] = data_args.dataset_name
 
-    # if training_args.push_to_hub:
-    #     trainer.push_to_hub(**kwargs)
-    # else:
-    #     trainer.create_model_card(**kwargs)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(**kwargs)
+    else:
+        trainer.create_model_card(**kwargs)
 
     
 

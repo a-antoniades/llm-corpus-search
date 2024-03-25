@@ -40,6 +40,14 @@ def parse_args():
     args = parser.parse_args()
     return args
 
+def load_model(model_name_or_path, device='cuda'):
+    config = AutoConfig.from_pretrained(model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, config=config)
+    model = AutoModelForCausalLM.from_pretrained(model_name_or_path, config=config)
+    model.to(device)
+    model.eval()
+    return config, tokenizer, model
+
 def create_prompt(text, seperator_candidates=None):
     if seperator_candidates is None:
         separator_candidates = ["'text':", "summary", "'target':", 
@@ -271,13 +279,6 @@ def rank_classification(model, tokenizer, prompt, true_choice, answer_choices, d
 # In your main function
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    def load_model(model_name_or_path, device=device):
-        config = AutoConfig.from_pretrained(model_name_or_path)
-        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, config=config)
-        model = AutoModelForCausalLM.from_pretrained(model_name_or_path, config=config)
-        model.to(device)
-        model.eval()
-        return config, tokenizer, model
     
     bleu_score, meteor_sc = load_scores()
 
@@ -294,7 +295,7 @@ def main(args):
     text_column = args.text_column if args.text_column is not None else \
                 'text' if 'text' in dataset.column_names else \
                 'prompt' if 'prompt' in dataset.column_names else \
-                'inputs' if 'inputs' in dataset.column_names else None
+                'inputs' if                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           'inputs' in dataset.column_names else None
     if text_column is None:
         raise ValueError(f"No valid column name found in dataset. {dataset.column_names}")
 
