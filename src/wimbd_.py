@@ -3,6 +3,7 @@ import collections
 from collections import defaultdict
 from tqdm import tqdm
 import json
+import glob
 import pickle
 from itertools import product
 import ast
@@ -83,11 +84,12 @@ language_mapping = {"fr": "french",
                     "lt": "lithuanian",
                     "hu": "hungarian"}
 
-def load_ds_translation(tasks=None, **kwargs):
+
+def load_ds_translation(languages=None, **kwargs):
     ds_dict = {}
-    if tasks is None:
-        tasks = dataset_mapping['wmt09']
-    for language_pair in tasks:
+    if languages is None:
+        languages = dataset_mapping['wmt09']
+    for language_pair in languages:
         if isinstance(language_pair, str):
             language_pair = language_pair.split("-")
         default_dataset_names = ["wmt14", "wmt16"]
@@ -99,6 +101,73 @@ def load_ds_translation(tasks=None, **kwargs):
             ds = load_from_disk(f'/share/edc/home/antonis/datasets/huggingface/{dataset_name}-{language_pair[0]}-{language_pair[1]}')
         ds_dict[f"{language_pair[0]}-{language_pair[1]}"] = ds
     return ds_dict
+
+def load_trivia_qa(**kwargs):
+    return {'trivia_qa':
+                load_dataset("trivia_qa", "rc.nocontext", cache_dir=CACHE_DIR)
+            }
+
+def load_europarl(languages=None, **kwargs):
+    ds_to_load = {
+    'Helsinki-NLP/europarl': ['cs-en', 'en-fr', 'de-en', 
+                              'en-hu', 'en-es', 'en-it']
+    }
+    dataset = {}
+    languages = [f"{task[0]}-{task[1]}" for task in languages]
+    for ds, ds_tasks in ds_to_load.items():
+        for task in ds_tasks:
+            if languages is None or task in languages:
+                dataset[task] = load_dataset(ds, task, cache_dir=CACHE_DIR)['train']
+    return dataset
+
+def load_mmlu(tasks=None, **kwargs):
+    configs = get_dataset_config_names("hendrycks_test")
+    ds_full = {}
+    for config in configs:
+        if tasks is None or config in tasks:
+            ds_full[config] = load_dataset("hendrycks_test", config, cache_dir=CACHE_DIR)
+    return ds_full
+
+def load_bigbench(**kwargs):
+    # load bigbench tasks
+    bigbench_tasks = []
+    with open("./configs/data/bigbench_tasks.txt", "r") as f:
+        for line in f:
+            bigbench_tasks.append(line.strip())
+    ds_full = {}
+    for task in bigbench_tasks:
+        ds_full[task] = load_dataset("bigbench", task, cache_dir=CACHE_DIR)
+    return ds_full
+
+def _load_dataset(dataset_name, **kwargs):
+    """
+    Load the dataset based on the given dataset name.
+
+    :param dataset_name: Name of the dataset to load.
+    :param kwargs: Additional keyword arguments for loading datasets.
+    :return: Loaded dataset.
+    """
+    print(f"Loading dataset {dataset_name}")
+    if dataset_name == "mmlu":
+        # load MMLU
+        return load_mmlu(**kwargs) if not kwargs.get('debug', False) else load_mmlu(['elementary_mathematics'])
+    elif dataset_name == "bigbench":
+        return load_bigbench(**kwargs)
+    elif dataset_name == "arithmetic":
+        return load_arithmetic(**kwargs)
+    elif dataset_name in ["wmt", "translation"]:
+        # Assuming wt.lang_datasets_exp1 is available in the scope where this function is called
+        return load_ds_translation(**kwargs)
+    elif dataset_name == "wmt09_gens":
+        return load_from_disk(os.path.join(CACHE_DIR, dataset_name))
+    elif dataset_name == "europarl":
+        return load_europarl(**kwargs)
+    elif dataset_name == "trivia_qa":
+        return load_trivia_qa(**kwargs)
+    elif dataset_name == "sciq":
+        return {"sciq": load_from_disk(f"{CACHE_DIR}/sciq_converted")}
+    else:
+        raise ValueError(f"Dataset {dataset_name} not recognized")
 
 def filter_strings(text, str_remove=None, replacements=None):
     """
@@ -114,6 +183,169 @@ def filter_strings(text, str_remove=None, replacements=None):
     text = text.lstrip()  # Remove leading spaces
     return text
 
+def clean_text(string, dataset, filter, replace):
+    string_configs = {
+        "arithmetic": {
+            "filter_words": ['Question:', 'Answer:', 'What is', '?', '\n'],
+            "replace_words": {
+                "plus": "+"
+            }
+        }
+    }
+    if not isinstance(string, str):
+        if isinstance(string, list) or isinstance(string, tuple):
+            string = ' '.join(string)
+
+    if filter:
+        filter_words = string_configs[dataset]["filter_words"]
+        for s in filter_words:
+            string = string.replace(s, "")
+    
+    if replace:
+        replace_words = string_configs[dataset]["replace_words"]
+        for old, new in replace_words.items():
+            string = string.replace(old, new)
+    
+    # filter any leading spaces
+    string = string.lstrip()
+
+    return string
+
+def load_arithmetic(tasks=None, filtered=False, replacement=False, **kwargs):
+    """
+    todo: augment the data with alternate 
+    operator symbols e.g: plus/+ minus/- times/* divide/÷ etc
+    """
+    filter_words = ['Question:', 'Answer:', 'What is',
+                    '?', '\n']
+
+    replace_words = {
+        "plus": "+"
+    }
+
+    # load arithmetic tasks
+    configs = [
+        'arithmetic_2da', 'arithmetic_2ds', 
+        'arithmetic_2dm', 'arithmetic_1dc',
+        'arithmetic_3da', 'arithmetic_3ds',
+        'arithmetic_4da', 'arithmetic_4ds', 
+        'arithmetic_5da', 'arithmetic_5ds',
+    ] 
+    ds_arithmetic = {}
+    for config in configs:
+        if tasks is None or config in tasks:
+            ds = load_dataset("EleutherAI/arithmetic", 
+                                name=config, 
+                                cache_dir=CACHE_DIR)['validation']
+        if filtered:
+            # filter all columns to not contain filter_words
+            ds = ds.map(lambda x: {k: filter_strings(v, str_remove=filter_words) for k, v in x.items()})
+        if replacement:
+            ds = ds.map(lambda x: {k: filter_strings(v, replacements=replace_words) for k, v in x.items()})
+
+        ds_arithmetic[config] = ds
+    
+    return ds_arithmetic
+
+def load_lang_ds(lang_pairs=None, **kwargs):
+    lang_ds = {}
+    wb = WimbdTasks()
+    if lang_pairs is None:
+        lang_pairs = wb.lang_datasets_exp1
+    for lang_pair in lang_pairs:
+        lang_pair_ls = lang_pair.split("-")
+        ds_name = wb.get_dataset_name_from_language_pair(lang_pair_ls)
+        ds = load_ds(ds_name, language_pair=lang_pair_ls)
+        lang_ds[lang_pair] = ds['translation']
+    return lang_ds
+
+def load_results(base_results_path, models, task, shot, subtasks, replace_str='wmt09-'):
+    """
+    Load results from a structured directory into a dictionary.
+
+    :param base_results_path: The base directory where results are stored.
+    :param models: A list of model names.
+    :param task: The task name.
+    :param shot: The shot type (e.g., 'zero-shot').
+    :param tasks: A list of tasks to include in the results.
+    :return: A dictionary with the loaded results.
+    """
+    results_dict = defaultdict(dict)
+
+    # Iterate over each model and dataset, loading the results.json file
+    for model in models:
+        results_path = os.path.join(base_results_path, model, task)
+        for subtask in subtasks:
+            results_file = glob.glob(os.path.join(results_path, subtask, shot, '**/results.json'), recursive=True)
+            # print(f"results_file: {results_file}")
+            assert len(results_file) == 1, f"Found {len(results_file)} results files for model {model}, \
+                                             task {task}, shot {shot}, subtask {subtask} \
+                                             {results_file}"
+            results = json.load(open(results_file[0]))['results']
+            if replace_str:
+                subtask_ = subtask.replace(replace_str, '')
+            else:
+                subtask_ = subtask
+            results_dict[model][subtask_] = results[subtask]
+    
+    return results_dict
+
+def drop_rows_without_words(df, language):
+    def check_words(row):
+        example_text = row['example']['translation'][language]
+        sequence_words = row['sequence'].split()
+        for word in sequence_words:
+            if word.lower() not in example_text.lower():
+                return False
+        return True
+
+    tqdm.pandas(desc=f"Filtering rows for language: {language}")
+    mask = df.progress_apply(check_words, axis=1)
+    return df[mask]
+
+def filter_stop_words_(text, lang):
+    # Add punctuation to the list of stopwords
+    # stop_words = set(string.punctuation)
+    stop_words = set()
+
+    if lang == 'japanese':
+        words = nagisa.tagging(text)
+        stop_words.update([word for word, pos in zip(words.words, words.postags) if pos in ["助詞", "助動詞", "記号"]])
+        filtered_text = [w for w in words.words if w not in stop_words]
+    elif lang in ['czech', 'polish']:
+        stop_words.update(get_stop_words(lang))
+        filtered_text = [w for w in text.split() if not w in stop_words]
+    elif lang == 'chinese':
+        stop_words.update(set(stopwords.words('chinese')))
+        word_tokens = jieba.cut(text, cut_all=False)
+        filtered_text = [w for w in word_tokens if not w in stop_words]
+    else:
+        stop_words.update(set(stopwords.words(lang)))
+        word_tokens = word_tokenize(text)
+        filtered_text = [w for w in word_tokens if not w in stop_words]
+
+    return filtered_text
+
+
+def filter_percentile(df, percentile, column='value'):
+    # filter outliers
+    if percentile > 0:
+        upper_quantile = df[column].quantile(percentile)
+        df = df[df[column] < upper_quantile]
+    return df.reset_index(drop=True).sort_values(by=column, ascending=False)
+
+def drop_rows_with_stopwords(df, language):
+    def check_stopwords(row):
+        sequence_words = row[lang_col_name].split()
+        filtered_words = filter_stop_words_(row[lang_col_name], language)
+        return len(filtered_words) == len(sequence_words)
+
+    # convert language to full language name
+    lang_col_name = language
+    language = language_mapping[language]
+    tqdm.pandas(desc=f"Filtering rows for language: {language}")
+    mask = df.progress_apply(check_stopwords, axis=1)
+    return df[mask]
 
 class BasePaths:
     base_ngram_paths = {
@@ -156,7 +388,7 @@ class DataConfigs:
         'mmlu': {
             'text_1': 'question',
             'text_2': 'choices',
-            'split': 'auxiliary_train'
+            'split': 'test'
         },
         'bigbench': {
             'text_1': 'inputs',
@@ -172,10 +404,19 @@ class DataConfigs:
             'text_1': 'translation',
             'text_2': 'translation'
         },
+        'europarl': {
+            'text_1': 'translation',
+            'text_2': 'translation'
+        },
         'trivia_qa': {
             'text_1': 'question',
             'text_2': ['answer', 'value'],
             'split': 'validation'
+        },
+        'sciq': {
+            'text_1': 'question',
+            'text_2': 'choices',
+            'split': 'train',
         }
     }
 
@@ -293,28 +534,6 @@ class WimbdTasks:
         stopwords = [word for word, pos in zip(words.words, words.postags) if pos in ["助詞", "助動詞", "記号"]]
         return ' '.join(stopwords)
 
-    def filter_stop_words_(self, text, lang):
-        # Add punctuation to the list of stopwords
-        # stop_words = set(string.punctuation)
-        stop_words = set()
-
-        if lang == 'japanese':
-            words = nagisa.tagging(text)
-            stop_words.update([word for word, pos in zip(words.words, words.postags) if pos in ["助詞", "助動詞", "記号"]])
-            filtered_text = [w for w in words.words if w not in stop_words]
-        elif lang in ['czech', 'polish']:
-            stop_words.update(get_stop_words(lang))
-            filtered_text = [w for w in text.split() if not w in stop_words]
-        elif lang == 'chinese':
-            stop_words.update(set(stopwords.words('chinese')))
-            word_tokens = jieba.cut(text, cut_all=False)
-            filtered_text = [w for w in word_tokens if not w in stop_words]
-        else:
-            stop_words.update(set(stopwords.words(lang)))
-            word_tokens = word_tokenize(text)
-            filtered_text = [w for w in word_tokens if not w in stop_words]
-        return filtered_text
-
     def process_text(self, text, lang, n_gram, 
                      filter_stopwords=False, only_alpha=False):
         if isinstance(text, (int, float)):
@@ -329,7 +548,7 @@ class WimbdTasks:
         if filter_stopwords:
             text = text.lower()
             text = text.translate(str.maketrans('', '', string.punctuation))
-            filtered_text = self.filter_stop_words_(text, lang)
+            filtered_text = filter_stop_words_(text, lang)
             print(f"filtered_text: {filtered_text}")
         else:
             filtered_text = text.split(' ')
@@ -365,6 +584,7 @@ class WimbdTasks:
     def get_combinations(self, text_1, text_2, language_pair, n_gram=2,
                          no_split_text2=False, filter_stopwords=False, 
                          only_alpha=False):
+        
         full_lang_1_name = self.get_language_name(language_pair[0])
         full_lang_2_name = self.get_language_name(language_pair[1])
         
@@ -392,8 +612,11 @@ class WimbdTasks:
 
         # align lang pairs 
         if language_pair[0] != language_pair[1]:
-            text_combinations = self.align_lang_pairs(text_combinations, language_pair[0], language_pair[1])
-
+            text_combinations = self.align_lang_pairs(text_combinations, 
+                                                      language_pair[0], 
+                                                      language_pair[1],
+                                                      threshold=0.6)
+            
         return text_combinations
 
     def get_language_name(self, lang_code):
@@ -449,137 +672,6 @@ class WimbdTasks:
 
         return filtered_df
 
-
-def _load_dataset(dataset_name, **kwargs):
-    """
-    Load the dataset based on the given dataset name.
-
-    :param dataset_name: Name of the dataset to load.
-    :param kwargs: Additional keyword arguments for loading datasets.
-    :return: Loaded dataset.
-    """
-    print(f"Loading dataset {dataset_name}")
-    if dataset_name == "mmlu":
-        # load MMLU
-        return load_mmlu(**kwargs) if not kwargs.get('debug', False) else load_mmlu(['elementary_mathematics'])
-    elif dataset_name == "bigbench":
-        return load_bigbench(**kwargs)
-    elif dataset_name == "arithmetic":
-        return load_arithmetic(**kwargs)
-    elif dataset_name == "wmt09":
-        return load_from_disk(os.path.join(CACHE_DIR, "wmt09_gens"))
-    elif dataset_name in ["wmt", "translation"]:
-        # Assuming wt.lang_datasets_exp1 is available in the scope where this function is called
-        return load_ds_translation(**kwargs)
-    elif dataset_name == "trivia_qa":
-        return load_trivia_qa(**kwargs)
-    else:
-        raise ValueError(f"Dataset {dataset_name} not recognized")
-
-
-
-def load_trivia_qa(**kwargs):
-    return {'trivia_qa':
-                load_dataset("trivia_qa", "rc.nocontext", cache_dir=CACHE_DIR)
-            }
-
-
-def load_mmlu(tasks=None, **kwargs):
-    configs = get_dataset_config_names("hendrycks_test")
-    ds_full = {}
-    for config in configs:
-        if tasks is None or config in tasks:
-            ds_full[config] = load_dataset("hendrycks_test", config, cache_dir=CACHE_DIR)
-    return ds_full
-
-def load_bigbench(**kwargs):
-    # load bigbench tasks
-    bigbench_tasks = []
-    with open("./configs/data/bigbench_tasks.txt", "r") as f:
-        for line in f:
-            bigbench_tasks.append(line.strip())
-    ds_full = {}
-    for task in bigbench_tasks:
-        ds_full[task] = load_dataset("bigbench", task, cache_dir=CACHE_DIR)
-    return ds_full
-
-def clean_text(string, dataset, filter, replace):
-    string_configs = {
-        "arithmetic": {
-            "filter_words": ['Question:', 'Answer:', 'What is', '?', '\n'],
-            "replace_words": {
-                "plus": "+"
-            }
-        }
-    }
-    if not isinstance(string, str):
-        if isinstance(string, list) or isinstance(string, tuple):
-            string = ' '.join(string)
-
-    if filter:
-        filter_words = string_configs[dataset]["filter_words"]
-        for s in filter_words:
-            string = string.replace(s, "")
-    
-    if replace:
-        replace_words = string_configs[dataset]["replace_words"]
-        for old, new in replace_words.items():
-            string = string.replace(old, new)
-    
-    # filter any leading spaces
-    string = string.lstrip()
-
-    return string
-
-
-def load_arithmetic(tasks=None, filtered=False, replacement=False, **kwargs):
-    """
-    todo: augment the data with alternate 
-    operator symbols e.g: plus/+ minus/- times/* divide/÷ etc
-    """
-    filter_words = ['Question:', 'Answer:', 'What is',
-                    '?', '\n']
-
-    replace_words = {
-        "plus": "+"
-    }
-
-    # load arithmetic tasks
-    configs = [
-        'arithmetic_2da', 'arithmetic_2ds', 
-        'arithmetic_2dm', 'arithmetic_1dc',
-        'arithmetic_3da', 'arithmetic_3ds',
-        'arithmetic_4da', 'arithmetic_4ds', 
-        'arithmetic_5da', 'arithmetic_5ds',
-    ] 
-    ds_arithmetic = {}
-    for config in configs:
-        if tasks is None or config in tasks:
-            ds = load_dataset("EleutherAI/arithmetic", 
-                                name=config, 
-                                cache_dir=CACHE_DIR)['validation']
-        if filtered:
-            # filter all columns to not contain filter_words
-            ds = ds.map(lambda x: {k: filter_strings(v, str_remove=filter_words) for k, v in x.items()})
-        if replacement:
-            ds = ds.map(lambda x: {k: filter_strings(v, replacements=replace_words) for k, v in x.items()})
-
-        ds_arithmetic[config] = ds
-    
-    return ds_arithmetic
-
-def load_lang_ds(lang_pairs=None, **kwargs):
-    lang_ds = {}
-    wb = WimbdTasks()
-    if lang_pairs is None:
-        lang_pairs = wb.lang_datasets_exp1
-    for lang_pair in lang_pairs:
-        lang_pair_ls = lang_pair.split("-")
-        ds_name = wb.get_dataset_name_from_language_pair(lang_pair_ls)
-        ds = load_ds(ds_name, language_pair=lang_pair_ls)
-        lang_ds[lang_pair] = ds['translation']
-    return lang_ds
-    
 class WimbdAnalysis:
     def __init__(self, base_path, dataset_list, n_gram, filter_chars):
         self.task_str = "_".join(dataset_list)
@@ -674,13 +766,15 @@ class WimbdAnalysis:
 
         # Apply the check function to each row and filter the DataFrame
         initial_row_count = len(df)
-        pbar = tqdm(total=initial_row_count, desc="Filtering rows")
-        # Ensure that the lambda function always returns a boolean value
-        filtered_df = df[~df[text_column].apply(lambda x: contains_person_or_place(x) if x is not None else False)]
-        pbar.close()
+        
+        tqdm.pandas(desc="Filtering rows")
+        filtered_df = df[~df[text_column].progress_apply(lambda x: contains_person_or_place(x) if x is not None else False)]
+        
         final_row_count = len(filtered_df)
         rows_deleted = initial_row_count - final_row_count
+        
         print(f"Initial length: {initial_row_count}, Final length: {final_row_count}, Rows deleted: {rows_deleted}")
+        
         return filtered_df
     
     def align_lang_pairs_df(self, df, lang_1, lang_2, threshold=0.7):
@@ -715,7 +809,8 @@ class WimbdAnalysis:
     def prepare_ngram_df(self, n_gram_freqs_path, is_all=False, 
                         filter_chars=False, detect_lang=False,
                         percentile=0.95, n_gram=None, filter_entities=False,
-                        align_langs=0):
+                        align_langs=0, filter_stopwords=False, remove_english=True,
+                        remove_non_english=False):
 
         def find_english_column(df, languages):
             if 'index' in df.columns:
@@ -747,26 +842,44 @@ class WimbdAnalysis:
 
         if is_all:
             df = df.reset_index().rename(columns={"index": non_english_lang})
-            df = df.drop(columns=['language'])
-            df = self.filter_column_by_language(df, other_lang_col_name, 'lang')
+            print(df.head(1))
+            if remove_english:
+                if 'language' in df.columns:
+                    df = df.drop(columns=['language'])
+                if 'lang' in df.columns:
+                    df = self.filter_column_by_language(df, other_lang_col_name, 'lang')
+                else:
+                    df = drop_rows_without_words(df, non_english_lang)
+            if remove_non_english:
+                df = drop_rows_without_words(df, en_lang_col_name)
         else:
             df = df.reset_index().rename(columns={"level_0": languages[0], "level_1": languages[1]})
 
         # if filter_chars:
         #     target_column = other_lang_col_name if other_lang_col_name in df.columns else "index"
         #     df = self.filter_column_by_language(df, target_language, target_column)
+        
+        if filter_stopwords:
+            print(f"columns: {df.columns}")
+            print(f"other_lang_col_name: {other_lang_col_name}")
+            if other_lang_col_name in df.columns:
+                df = drop_rows_with_stopwords(df, other_lang_col_name)
+            if en_lang_col_name in df.columns:
+                df = drop_rows_with_stopwords(df, en_lang_col_name)
 
         if detect_lang:
             target_column = non_english_lang if non_english_lang in df.columns else "index"
             df = filter_by_language(df, non_english_lang, target_column)
-            # df = self.check_language_df(df, target_language)
         
         if filter_entities:
             # print(f"filtering entitites!")
             # print(f"df: {df}")
             print(f"df.columns: {df.columns}")
             chosen_column = en_lang_col_name if en_lang_col_name in df.columns else other_lang_col_name
-            df = self.filter_rows_with_names_and_places(df, chosen_column)
+            if en_lang_col_name in df.columns:
+                df = self.filter_rows_with_names_and_places(df, en_lang_col_name)
+            if other_lang_col_name in df.columns:
+                df = self.filter_rows_with_names_and_places(df, other_lang_col_name)
         
         if align_langs > 0:
             df = self.align_lang_pairs_df(df, languages[0], languages[1],
@@ -791,7 +904,8 @@ class WimbdAnalysis:
         return n_gram_freqs, df
     
     def prepare_ngram_df_(self, n_gram_freqs_path, is_all=False, 
-                        filter_chars=False, detect_lang=False, remove_outliers=False):
+                          filter_chars=False, detect_lang=False, 
+                          remove_outliers=False):
         with open(n_gram_freqs_path, "rb") as f:
             n_gram_freqs = pickle.load(f)
         n_gram_freqs = dict(sorted(n_gram_freqs.items(), key=lambda item: item[1]['value'], reverse=True))
@@ -846,11 +960,12 @@ class WimbdAnalysis:
         # save lang_df
         kwarg_string = '_'.join(f"{key}{value}" for key, value in kwargs.items())
         filename = f"lang_dfs_{kwarg_string}.pkl"
-        with open(os.path.join(base_path, filename), "wb") as f:
+        save_pth = os.path.join(base_path, filename)
+        with open(save_pth, "wb") as f:
             pickle.dump(lang_dfs, f)
         
-        print(f"saved file: {filename} in {base_path}")
-        return lang_dfs
+        print(f"saved file: {save_pth}")
+        return lang_dfs, save_pth
     
     def get_task_dfs(self, base_path, datasets, **kwargs):
         files = [file for file in os.listdir(base_path) if file.endswith(".pkl")]
@@ -1009,7 +1124,7 @@ class WimbdAnalysis:
 
         plt.xlabel(x_key, fontsize=15)
         plt.ylabel('BLEU Score', fontsize=15)
-        # plt.legend(bbox_to_anchor=(1.2, 1), loc='upper right')
+        plt.legend(bbox_to_anchor=(1.2, 1), loc='upper right')
         if name is not None:
             plt.title(name)
         if log_axis:

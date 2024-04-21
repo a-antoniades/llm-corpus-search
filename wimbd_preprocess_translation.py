@@ -34,7 +34,7 @@ print("Detected language:", language)
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n_grams", type=int, default=1)
+    parser.add_argument("--n_grams", type=int, nargs='+', default=None)
     parser.add_argument("--base_dir", type=str, default="./results/n-grams/wmt/pile/exp4/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue")
     # parser.add_argument("--base_path", type=str, default=None)
     # parser.add_argument("--base_path_common", type=str, default=None)
@@ -54,6 +54,7 @@ def main(args):
     FILTER_CHARS = False
     DETECT_LANG = False
     PERCENTILE = 0.1
+    FILTER_STOPWORDS = True if N_GRAMS < 3 else False
 
     # model params
     base_results_path = "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/pythia/experiment_3/inference/EleutherAI"
@@ -87,23 +88,70 @@ def main(args):
         os.makedirs(PLOT_PATH)
 
     # %%
-    # lang_dfs_all = wa.get_lang_dfs(BASE_PATH_ALL, LANGUAGES, filter_chars=False,
-    #                               percentile=0.95)
-    # lang_dfs_common = wa.get_lang_dfs(BASE_PATH_COMMON, LANGUAGES, filter_chars=FILTER_CHARS,
-    #                                     percentile=0.999, n_gram=N_GRAMS)
-    # lang_dfs_common_0 = wa.get_lang_dfs(BASE_PATH_COMMON, LANGUAGES, filter_chars=FILTER_CHARS,
-    #                                     percentile=0.0)
-    # lang_dfs_all_filtered = wa.get_lang_dfs(BASE_PATH_COMMON, LANGUAGES, filter_chars=True,
-    #                                         percentile=0.99, detect_lang=False, filter_entities=False,
-    #                                         align_langs=True)
-    lang_dfs_all_filtered = wa.get_lang_dfs(BASE_PATH_ALL, LANGUAGES, is_all=True, filter_chars=False,
-                                            percentile=0.95, detect_lang=False, filter_entities=True)
-    lang_dfs_common_filtered = wa.get_lang_dfs(BASE_PATH_COMMON, LANGUAGES, filter_chars=False,
-                                               percentile=0.995, detect_lang=False, filter_entities=True,
-                                               align_langs=0.8)
+    ## Filter ALL
+    # lang_dfs_all_filtered, lang_dfs_all_pth = wa.get_lang_dfs(BASE_PATH_ALL, LANGUAGES, is_all=True, 
+    #                                         filter_chars=False, percentile=0, detect_lang=True, 
+    #                                         filter_entities=True, filter_stopwords=True,
+    #                                         remove_english=True, remove_non_english=False)
+    # lang_dfs_common_filtered, lang_dfs_common_pth = wa.get_lang_dfs(BASE_PATH_COMMON, LANGUAGES, filter_chars=False,
+    #                                            percentile=0, detect_lang=True, filter_entities=True,
+    #                                            filter_stopwords=True, align_langs=0)
+
+    lang_dfs_all_filtered, lang_dfs_all_pth = wa.get_lang_dfs(BASE_PATH_ALL, LANGUAGES, is_all=True, 
+                                            filter_chars=False, percentile=0, detect_lang=True, 
+                                            filter_entities=True, filter_stopwords=FILTER_STOPWORDS,
+                                            remove_english=True, remove_non_english=False)
+    lang_dfs_common_filtered, lang_dfs_common_pth = wa.get_lang_dfs(BASE_PATH_COMMON, LANGUAGES, filter_chars=False,
+                                               percentile=0, detect_lang=True, filter_entities=True,
+                                               filter_stopwords=FILTER_STOPWORDS, align_langs=0)
+
+    return {
+        "lang_dfs_all": {
+            'data': lang_dfs_all_filtered,
+            'path': lang_dfs_all_pth
+        },
+        "lang_dfs_common_filtered": {
+            'data': lang_dfs_common_filtered,
+            'path': lang_dfs_common_pth
+        }
+    }
 
 if __name__ == "__main__":
     args = parse_args()
-    for n_grams in [1, 2, 3, 4]:
-        args.n_grams = n_grams
+    if args.n_grams is None:
+        n_grams = range(1, 3)
+        for n_gram in n_grams:
+            try:
+                args.n_grams = n_gram
+                main(args)
+            except:
+                pass
+    else:
         main(args)
+
+
+"""
+
+CUDA_VISIBLE_DEVICES="" python wimbd_preprocess_translation.py --n_grams 2 \
+    --base_dir "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue"
+
+CUDA_VISIBLE_DEVICES="" python wimbd_preprocess_translation.py --n_grams 2 \
+    --base_dir "./results/n-grams/wmt/pile/exp4/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue"
+
+CUDA_VISIBLE_DEVICES="" python wimbd_preprocess_translation.py \
+    --base_dir "./results/n-grams/wmt/pile/exp4/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue"
+    
+    
+CUDA_VISIBLE_DEVICES="" python wimbd_preprocess_translation.py --n_grams 2 \
+    --base_dir "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue"
+
+europarl fstop filtered: /results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue
+
+europarl, fstop true
+CUDA_VISIBLE_DEVICES="" python wimbd_preprocess_translation.py \
+                        --base_dir "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue"
+
+
+"""
+# %%
+

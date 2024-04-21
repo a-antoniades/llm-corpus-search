@@ -7,13 +7,16 @@ from functools import partial
 import time
 from tqdm import tqdm
 import collections
+import numpy as np
 from distutils.util import strtobool
  
 from elasticsearch import Elasticsearch
-from wimbd.es import count_documents_containing_phrases, get_documents_containing_phrases
+from wimbd.es import get_documents_containing_phrases
+from src.infini_search import count_documents_containing_phrases
 from src.utils import running_jupyter
 
 from transformers import set_seed
+import datasets
 set_seed(420)
 
 import argparse
@@ -51,6 +54,7 @@ def parse_args():
     else:
         parser = argparse.ArgumentParser()
         parser.add_argument("--name", type=str, default=None, help="Name of the experiment")
+        parser.add_argument("--type", type=str, default="wimbd", help="Type of the experiment")
         parser.add_argument("--corpus", type=str, default="re_pile", help="Dataset to use")
         parser.add_argument("--method", type=str, default=None, help="Method to use for the query")
         parser.add_argument("--get_docs", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable getting the documents")
@@ -66,6 +70,7 @@ def parse_args():
         parser.add_argument("--replace_keywords", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable filtering of kewywords")
         parser.add_argument("--only_alpha", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable filtering of non-alphabetic characters")
         parser.add_argument("--delimeter", type=str, default=" ", help="Delimeter to use for splitting text")
+        parser.add_argument("--cont_from", type=str, default=None, help="Continue from a specific task")
         args = parser.parse_args()
     return args
 
@@ -80,42 +85,60 @@ def main(args):
     if not os.path.exists(save_path) and not args.debug:
         os.makedirs(save_path)
 
-    if args.corpus == 'pile':
-        index = 're_pile'
-        cloud_id = "m-datasets:dXMtY2VudHJhbDEuZ2NwLmNsb3VkLmVzLmlvJDk1N2U5ODIwZDUxNTQ0YWViMjk0MmQwNzI1NjE0OTQ2JDhkN2M0OWMyZDEzMTRiNmM4NDNhNGEwN2U4NDE5NjRl"
-        api_key = "RlZBbHpZc0J1MEw4LVVWVk9SaTE6bXJlSUM2QnlSQmFHemhwVElVUnZyQQ=="
-    elif args.corpus == 'dolma':
-        index = "docs_v1.5_2023-11-02"
-        cloud_id = "dolma-v15:dXMtY2VudHJhbDEuZ2NwLmNsb3VkLmVzLmlvOjQ0MyQ1MjQyM2ZiNjk0NGE0YzdkOGQ5N2Y3NDM2MmMzODY3ZSQxMDNiM2ZkYTUwYzk0MTNmYmUwODA1ZDMyNjQ5YTliNQ=="
-        api_key = "QTJiajFJMEIxR1JtTm13YUZBVGc6dEpudXhEd19SRzJUOVZNYUpDdlItdw=="
-    else:
-        raise ValueError(f"Method {args.corpus} not recognized")
+    if args.type == 'wimbd':
+        if args.corpus == 'pile':
+            index = 're_pile'
+            cloud_id = "m-datasets:dXMtY2VudHJhbDEuZ2NwLmNsb3VkLmVzLmlvJDk1N2U5ODIwZDUxNTQ0YWViMjk0MmQwNzI1NjE0OTQ2JDhkN2M0OWMyZDEzMTRiNmM4NDNhNGEwN2U4NDE5NjRl"
+            api_key = "RlZBbHpZc0J1MEw4LVVWVk9SaTE6bXJlSUM2QnlSQmFHemhwVElVUnZyQQ=="
+        elif args.corpus == 'dolma':
+            index = "docs_v1.5_2023-11-02"
+            cloud_id = "dolma-v15:dXMtY2VudHJhbDEuZ2NwLmNsb3VkLmVzLmlvOjQ0MyQ1MjQyM2ZiNjk0NGE0YzdkOGQ5N2Y3NDM2MmMzODY3ZSQxMDNiM2ZkYTUwYzk0MTNmYmUwODA1ZDMyNjQ5YTliNQ=="
+            api_key = "QTJiajFJMEIxR1JtTm13YUZBVGc6dEpudXhEd19SRzJUOVZNYUpDdlItdw=="
+        else:
+            raise ValueError(f"Method {args.corpus} not recognized")
+        es = Elasticsearch(
+            cloud_id=cloud_id,
+            api_key=api_key,
+            retry_on_timeout=True,
+            http_compress=True)
+    elif args.type == 'infini':
+        if args.corpus == 'dolma':
+            index = "v4_dolma-v1_6_llama"
+            es = None
+        elif args.corpus == 'pile':
+            index = "v4_piletrain_llama"
+            es = None
 
-    es = Elasticsearch(
-        cloud_id=cloud_id,
-        api_key=api_key,
-        retry_on_timeout=True,
-        http_compress=True)
 
     wt = WimbdTasks()
 
     print(f"dataset: {args.dataset}")
     args.language_pair = tuple(args.language_pair)
-    args.tasks = args.tasks if args.tasks is not None else [args.language_pair]
+    args.tasks = args.tasks
     print(f"language_pair: {args.language_pair}")
     ds = _load_dataset(
         args.dataset, 
-        tasks=args.tasks, 
+        tasks=args.tasks,
+        languages=[args.language_pair]
     )
-    print(f"dataset: {ds.keys()}")
+    print(f"dataset keys: {ds.keys()}")
 
     total_tasks = len(ds)
     completed_tasks = 0
-    if not isinstance(ds, dict):
+    if not isinstance(ds, dict or not isinstance(ds, datasets.DatasetDict)):
         ds = {args.language_pair: ds}
+
     for task_name, task_ds in tqdm(ds.items(), desc="Processing tasks", total=total_tasks):
+        
+        # continue from a specific task
+        if args.cont_from is not None:
+            if task_name != args.cont_from:
+                print(f"Skipping task {task_name}")
+                continue
+            else:
+                args.cont_from = None
+
         completed_tasks += 1
-        tasks_left = total_tasks - completed_tasks
         if not args.debug:
             filename = os.path.join(save_path, f"{task_name}.pkl")
             if not os.path.exists(save_path):
@@ -126,7 +149,6 @@ def main(args):
                                                         'example': None,
                                                         'task': task_name})
 
-        print(f"task_ds: {task_ds['translation']}")
         # check if split
         if 'split' in DataConfigs.data_keys[args.dataset].keys():
             ds_split = DataConfigs.data_keys[args.dataset]['split']
@@ -137,17 +159,23 @@ def main(args):
             if len(task_ds) < args.n_samples:
                 print(f"Skipping task {task_name} because it has less than {args.n_samples} samples")
                 continue
-            task_ds_full = task_ds.shuffle().select(range(args.n_samples))
+            indexes =  np.random.choice(len(task_ds), args.n_samples, replace=False)
+            task_ds_full = task_ds.select(indexes)
+            # save indexes
+            if not args.debug:
+                with open(os.path.join(save_path, f"indexes_{task_name}.npy"), 'wb') as f:
+                    np.save(f, indexes)
         else:
             task_ds_full = task_ds
         
-        for example in tqdm(task_ds_full, desc=f"Processing examples for task {task_name}"):
+        for idx, example in tqdm(enumerate(task_ds_full), desc=f"Processing examples for task {task_name}"):
             print(f"Task {task_name}, ({completed_tasks}/{total_tasks}")
             print(example)
+            start_time = time.time()
 
             dataset_keys = DataConfigs.data_keys[args.dataset]
 
-            if args.dataset == "wmt":
+            if args.dataset in ["wmt", "europarl"]:
                 keys_1 = ['translation', args.language_pair[0]]
                 keys_2 = ['translation', args.language_pair[1]]
                 text_1 = get_nested_value(example, keys_1)
@@ -173,6 +201,7 @@ def main(args):
             coverage = []
             p_coverage = []
             if args.method == "common":
+
                 ngram_combinations = wt.get_combinations(text_1, text_2, 
                                                         args.language_pair, args.n_grams,
                                                         no_split_text2=args.no_split_text2,
@@ -280,7 +309,11 @@ def main(args):
 
             # calculate p_coverage (propotion of ngrams found)
             p_coverage.append(n_coverage / len(ngram_combinations) if len(ngram_combinations) > 0 else 0)
-
+            tasks_left = total_tasks - completed_tasks
+            instances_left = len(task_ds_full) - idx
+            print(f"completed instance {idx}, time: {time.time() - start_time}, \
+                    time remaining for task: {instances_left * (time.time() - start_time)}")
+            
             # save as .pkl
             if not args.debug:
                 with open(filename, 'wb') as f:
@@ -289,6 +322,8 @@ def main(args):
                     pickle.dump(coverage, f)
                 with open(os.path.join(save_path, f"task-p-coverage.pkl"), 'wb') as f:
                     pickle.dump(p_coverage, f)
+
+
 
 if __name__ == "__main__":
     args = parse_args()
@@ -304,26 +339,44 @@ if __name__ == "__main__":
 """
 
 # Example usage for MMLU
+# Example usage for MMLU
 CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
+                        --type infini \
                         --corpus dolma \
                         --n_grams 5 \
-                        --dataset trivia_qa \
+                        --dataset mmlu \
                         --filter_stopwords true \
                         --replace_keywords false \
                         --only_alpha false \
-                        --n_samples 10000 \
+                        --n_samples 500 \
+                        --name exp4_nofilter \
                         --debug
 
+                        
 # Example usage for translation
 CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
-                        --corpus dolma \
-                        --n_grams 2 \
-                        --dataset wmt \
-                        --language_pair es en \
+                        --type infini \
+                        --corpus pile \
+                        --n_grams 1 \
+                        --dataset europarl \
+                        --language_pair en es \
                         --filter_stopwords true \
                         --replace_keywords false \
                         --only_alpha false \
                         --get_docs false \
                         --debug
+
+
+# Example usage for sciq
+CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
+                        --type infini \
+                        --corpus pile \
+                        --n_grams 5 \
+                        --dataset sciq \
+                        --filter_stopwords true \
+                        --replace_keywords false \
+                        --only_alpha false \
+                        --n_samples 500 \
+                        --name debug
 
 """

@@ -39,10 +39,8 @@ models = ['pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 'pythia-1.4b', 'pythia-410
 LANGUAGES = ['wmt09-cs-en', 'wmt09-de-en', 'wmt09-fr-en', 'wmt09-es-en', 'wmt09-it-en', 'wmt09-hu-en']
 TASKS = [task.replace('wmt09-', '') for task in LANGUAGES]
 
-
 wa = WimbdAnalysis(BASE_PATH, LANGUAGES, N_GRAMS, FILTER_CHARS)
 wt = WimbdTasks()
-
 
 LANGUAGES_STR = "_".join(LANGUAGES)
 PLOT_PATH = f"./results/n-grams/exp_full/{N_GRAMS}/plots/{LANGUAGES_STR}_filter_{FILTER_CHARS}"
@@ -75,7 +73,6 @@ the language pairs that are available
 #     midpoint = np.median(df['value'])
 #     print(f"// mid 100")
 #     display(df[df['value'] <= midpoint].iloc[:100])
-
 
 def get_model_results_from_df(df, metric='bleu'):
     """"
@@ -121,6 +118,4 @@ model_color_mapping = {model: model_colormap(1 - i / len(models)) for i, model i
 # plot
 wa.plot_scores(model2score, dataset2score, color_mapping,
                model_color_mapping, name="XY_pairs")
-
-
 # %%

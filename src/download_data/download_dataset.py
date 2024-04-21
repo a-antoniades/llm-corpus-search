@@ -16,4 +16,5 @@ extra_args = args.extra_args.split()
 # Load the dataset
 # dataset = load_dataset(args.dataset, *extra_args, cache_dir=args.cache_dir)
 
-dataset = load_dataset("ccaligned_multilingual", language_code="fr_XX", type="sentences", cache_dir=args.cache_dir)
+# dataset = load_dataset("ccaligned_multilingual", language_code="fr_XX", type="sentences", cache_dir=args.cache_dir)
+dataset = load_dataset(args.dataset, *extra_args, cache_dir=args.cache_dir)

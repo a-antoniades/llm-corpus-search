@@ -13,6 +13,7 @@ from matplotlib.lines import Line2D
 import seaborn as sns
 import numpy as np
 import pandas as pd
+import traceback
 
 import matplotlib.pyplot as plt
 from adjustText import adjust_text
@@ -27,11 +28,11 @@ def parse_args():
     import argparse
     parser = argparse.ArgumentParser(description='WIMBD Analysis')
     parser.add_argument('--dataset', type=str, default="mmlu", help='Dataset to use')
-    parser.add_argument('--ngrams', type=int, default=5, help='N-grams')
+    parser.add_argument("--ngrams", type=int, nargs='+', default=None)
     parser.add_argument('--shots', type=int, default=0, help='Number of shots')
     parser.add_argument('--base_dir', type=str, help='Base directory')
     parser.add_argument('--filename', type=str, default=None, help='Filename of preprocessed task_dfs if it exists')
-    parser.add_argument('--method', type=str, default=None, help='Method to use')
+    parser.add_argument('--method', type=str, nargs='+', default=None, help='Method to use')
     parser.add_argument('--debug', action='store_true', help='Debug mode')
     return parser.parse_args()
 
@@ -43,7 +44,6 @@ def softmax(x):
 
 def nll_to_prob(nll):
     return np.exp(nll)
-
 
 def get_metric(results):
     metrics_to_check = [
@@ -214,6 +214,7 @@ def merge_and_process_dfs(task_dfs):
     
     return example_dfs
 
+from rapidfuzz import process, fuzz
 
 def find_matching_rows(df, src_phrase, ref_phrase):
     # Split the phrases into individual words
@@ -222,29 +223,89 @@ def find_matching_rows(df, src_phrase, ref_phrase):
 
     # Use all() to check if all words are in the 'src' and 'ref' columns
     match = df[
-        df['src'].apply(lambda x: all(re.search(re.escape(word), x, re.IGNORECASE) for word in src_words)) &
-        df['ref'].apply(lambda x: all(re.search(re.escape(word), x, re.IGNORECASE) for word in ref_words))
+        df['src'].apply(lambda x: all(re.search(r'\b' + re.escape(word) + r'\b', x, re.IGNORECASE) for word in src_words)) &
+        df['ref'].apply(lambda x: all(re.search(r'\b' + re.escape(word) + r'\b', x, re.IGNORECASE) for word in ref_words))
     ]
-    return match
+
+    # If an exact match is found
+    if len(match) == 1:
+        return match
+    elif len(match) > 1:
+        # If there are multiple exact matches, sort them based on the length of the 'src' and 'ref' columns
+        match = match.sort_values(by=['src', 'ref'], key=lambda col: col.str.len(), ascending=[False, False])
+        return match.iloc[0:1]  # Return only the first match
+    else:
+        # If no exact match is found, perform a fuzzy search
+        # Concatenate all words into a single string for fuzzy matching
+        src_phrase_str = " ".join(src_words)
+        ref_phrase_str = " ".join(ref_words)
+
+        # Get the best fuzzy match for 'src' and 'ref' columns separately
+        best_src_match = process.extractOne(src_phrase_str, df['src'], scorer=fuzz.WRatio)
+        best_ref_match = process.extractOne(ref_phrase_str, df['ref'], scorer=fuzz.WRatio)
+
+        # Find the intersection of the best fuzzy matches for 'src' and 'ref'
+        fuzzy_match = df[
+            (df['src'] == best_src_match[0]) & (df['ref'] == best_ref_match[0])
+        ]
+
+        return fuzzy_match
+    
 
 
 def find_matching_id(row, instances_df):
+    def find_non_en_key(dict_):
+        for n, (k, v) in enumerate(dict_.items()):
+            if k != 'en':
+                return n, k
+            
     # Check if the 'query' is a list and has two elements to match against 'src' and 'ref'
     if 'translation' in row['example']:
         translation = row['example']['translation']
         langs = list(translation.keys())
-        # print(f"translation: {translation[langs[1]]}")
-        # first entry is src, second is ref
+        n_col_key, col_key = find_non_en_key(translation)
+        instances_key = 'src' if n_col_key == 0 else 'ref'
         match = instances_df[
-            instances_df['ref'].str.contains(translation['en'], na=False, regex=False)
+            instances_df[instances_key].str.contains(
+                re.escape(translation[col_key]), 
+                na=False, 
+                regex=True, 
+                case=False,
+                flags=re.IGNORECASE
+            )
         ]
+        # If no match is found, perform fuzzy matching
+        if match.empty:
+            best_match = process.extractOne(
+                translation[col_key], 
+                instances_df[instances_key], 
+                scorer=fuzz.token_set_ratio
+            )
+            print(f"best_match: {best_match}")
+            
+            # Check if the best match score is above a certain threshold, e.g., 90
+            if best_match and best_match[1] > 80:
+                best_match_index = best_match[2]
+                match = instances_df.iloc[[best_match_index]]
+            else:
+                # Log the unmatched case for review
+                print(f"example not similar enough")
+                # make match.empty
+                match = pd.DataFrame()
+
     elif isinstance(row['example'], list) and len(row['example']) == 2:
         match = find_matching_rows(instances_df, row['example'][0], row['example'][1])
     else:
         match = instances_df[instances_df['query'].str.contains(row['query'], na=False, regex=False)]
+
     if not match.empty:
-        return match.iloc[0]['id']
+        matched_id = match.iloc[0]['id']
+        # Remove the matched row from instances_df
+        # instances_df.drop(match.index, inplace=True)
+        # print(f"Matched {row['query']} with {matched_id}")
+        return matched_id
     else:
+        # raise ValueError(f"No match found for {row['query']}")
         print(f"No match found for {row['query']}")
         return None
 
@@ -284,9 +345,9 @@ def main(args):
 
     # wmt09
     LANGUAGES = ['cs-en', 'hu-en', 'de-en', 'it-en', 'fr-en', 'es-en']
-    ds = _load_dataset(args.dataset, tasks=LANGUAGES if not args.debug else ["miscellaneous", "international_law"])
+    ds = _load_dataset(args.dataset, tasks=LANGUAGES)    # if not args.debug else ["miscellaneous", "international_law"])
 
-    # %%
+    # %%z
     # lang params
     N_GRAMS = args.ngrams
     BASE_DIR = args.base_dir
@@ -334,7 +395,7 @@ def main(args):
         "translation": {
             "paths": {
                 "0-shot": {
-                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/EleutherAI/" : [
+                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_6_logits_max_4/inference/EleutherAI" : [
                             'pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
                             'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
                             'pythia-70m', 'pythia-31m', 'pythia-14m'
@@ -372,8 +433,7 @@ def main(args):
     # %%
     # get model performance results on tasks
     results_dict, instance_results_dict = process_model_results(base_results_paths, TASK, TASKS, result_shots)
-    print(f"results_dict: {results_dict}")
-
+    
     # %%
     model_scores, dataset_scores = wa.prepare_scores(results_dict, task_dfs, models,)
                                                     # coverage_=task_cov_common,
@@ -404,6 +464,10 @@ def main(args):
                                                     # coverage_=task_cov_all,
                                                     # cov_mean=task_cov_mean)
 
+    # if args.debug:
+    #     for model in instance_results_dict.keys():
+    #         instance_results_dict[model] = {k: v[:10] for k, v in instance_results_dict[model].items()}
+
     # Process all tasks
     model_instance_results = process_instance_results(instance_results_dict.copy(), task_dfs.copy(), label=f'_{METHOD}')
 
@@ -420,7 +484,10 @@ def main(args):
     instances_df = process_instances(model_instance_results[list(model_instance_results.keys())[0]])
 
     # Assuming BASE_PATH is defined
-    example_dfs_filename = os.path.join(BASE_PATH, f'example_dfs_{METHOD}_exact.csv')
+    filename = f'example_dfs_{METHOD}_exact.csv'
+    if args.debug:
+        filename = f'example_dfs_{METHOD}_exact_debug.csv'
+    example_dfs_filename = os.path.join(BASE_PATH, filename)
 
     print(f"example dfs all: {example_dfs}")
 
@@ -431,6 +498,9 @@ def main(args):
     examples_umatched = example_dfs['id'].isna().sum()
 
     ## Assuming BASE_PATH is defined
+    suffix = f"{result_shots}_{METHOD}"
+    if args.debug:
+        suffix = suffix + "_debug"
     example_dfs_models = process_and_save_results(example_dfs, model_instance_results, 
                                                   BASE_PATH, suffix=f"{result_shots}_{METHOD}")
 
@@ -448,11 +518,20 @@ def process_instances(model_instance_results):
 
 if __name__ == "__main__":
     args = parse_args()
-    # n_grams = args.ngrams
-    n_grams = [2, 3, 4]
-    for n_gram in n_grams:
-        args.ngrams = n_gram
-        main(args)
+    # n_grams = [args.ngrams]
+    n_grams = list(range(15)) if args.ngrams is None else args.ngrams
+    methods = ["common", "all"] if args.method is None else args.method
+    for method in methods:
+        args.method = method
+        for n_gram in n_grams:
+            try:
+                args.ngrams = n_gram
+                print(f"method: {args.method}, ngrams: {args.ngrams}")
+                main(args)
+            except Exception as e:
+                print(f"An error occurred: {e}")
+                traceback.print_exc()  # This will print the stack trace
+                continue
 
     # if args.method is None:
     #     methods = ["all", "common"]
@@ -468,11 +547,15 @@ if __name__ == "__main__":
 
 
 CUDA_VISIBLE_DEVICES="" python wimbd_process_results.py \
-                          --base_dir "./results/n-grams/exp_full" \
-                          --filename "lang_dfs_filter_charsFalse_percentile0.99_detect_langFalse_filter_entitiesTrue_align_langs0.8.pkl" \
+                          --base_dir "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue" \
+                          --filename "lang_dfs_is_allTrue_filter_charsFalse_percentile0_detect_langTrue_filter_entitiesTrue_filter_stopwordsTrue_remove_englishTrue_remove_non_englishFalse.pkl" \
                           --dataset "translation" \
-                          --method "common" \
-                          --ngrams 1
+                          --ngrams 1 2
+
+CUDA_VISIBLE_DEVICES="" python wimbd_process_results.py \
+                          --base_dir "./results/n-grams/exp_full" \
+                          --filename "lang_dfs_filter_charsFalse_percentile0_detect_langTrue_filter_entitiesTrue_filter_stopwordsTrue_align_langs0.pkl" \
+                          --dataset "translation" 
 
                           --base_dir "./results/n-grams/exp_full" \
                           --filename "lang_dfs_filter_charsFalse_lower_percentile0.005.pkl" \
@@ -489,6 +572,17 @@ CUDA_VISIBLE_DEVICES="" python wimbd_process_results.py \
 
 
                           --base_dir "./results/n-grams/mmlu/pile/exp4_nofilter/test-set/exp_full_None" \
+
+./results/n-grams/wmt/pile/exp4/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue/2/common/
+lang_dfs_filter_charsFalse_percentile0.999_detect_langFalse_filter_entitiesTrue.pkl
+CUDA_VISIBLE_DEVICES="" python wimbd_process_results.py \
+                          --base_dir "./results/n-grams/wmt/pile/exp4/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue" \
+                          --filename "lang_dfs_filter_charsFalse_percentile0.999_detect_langFalse_filter_entitiesTrue.pkl" \
+                          --dataset "translation" \
+                          --method "common" \
+                          --ngrams 2
+
+                          
 
                           
 """
