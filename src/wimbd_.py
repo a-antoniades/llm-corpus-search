@@ -31,7 +31,8 @@ nltk.download('stopwords')
 from scipy.stats import entropy
 from scipy.spatial.distance import cosine
 
-from datasets import load_dataset, load_from_disk, get_dataset_config_names
+from datasets import (load_dataset, load_from_disk, 
+                      get_dataset_config_names, DatasetDict)
 import pycountry
 import nagisa # for japanese
 import jieba # for chinese
@@ -44,13 +45,20 @@ import langid
 from tqdm import tqdm
 tqdm.pandas()
 
-from src.utils import remove_string, softmax
+from src.utils import (remove_string, normalize_string, softmax,
+                       remove_nested_lists)
 
 CACHE_DIR = "/share/edc/home/antonis/datasets/huggingface"
 WEIGHTS_DIR = "/share/edc/home/antonis/weights/huggingface"
 
 os.environ["HF_DATASETS_CACHE"] = CACHE_DIR
 os.environ["HF_WEIGHTS_PATH"] = WEIGHTS_DIR
+
+MODEL_NAMES = [
+    "OLMo-7B", "pythia-12b", "pythia-31m", "pythia-1.4b",
+    "pythia-410m", "pythia-70m", "pythia-14m", "pythia-2.8b",
+    "pythia-6.9b", "pythia-160m"
+]
 
 dataset_mapping = {
     "wmt09": [("cs", "en"), ("de", "en"), ("fr", "en"), ("es", "en"), ("it", "en"), ("hu", "en"),
@@ -103,7 +111,7 @@ def load_ds_translation(languages=None, **kwargs):
     return ds_dict
 
 def load_trivia_qa(**kwargs):
-    return {'trivia_qa':
+    return {'triviaqa':
                 load_dataset("trivia_qa", "rc.nocontext", cache_dir=CACHE_DIR)
             }
 
@@ -139,6 +147,32 @@ def load_bigbench(**kwargs):
         ds_full[task] = load_dataset("bigbench", task, cache_dir=CACHE_DIR)
     return ds_full
 
+def load_wmt09_gens(tasks=None, languages=None, **kwargs):
+    dataset_name = "wmt09_gens"
+    dataset_dict = {}
+    language_pairs = [f"{task[0]}-{task[1]}" for task in languages]
+    for model_name in MODEL_NAMES:
+        if tasks is None or model_name in tasks:
+            # Define the path for the current model's dataset
+            model_dataset_path = os.path.join(CACHE_DIR, f'{dataset_name}_{model_name}')
+            
+            # Load the dataset from disk
+            dataset_dict[model_name] = load_from_disk(model_dataset_path)
+
+            if languages:
+                dataset_dict[model_name] = {k: v for k, v in dataset_dict[model_name].items() if k in language_pairs}
+            
+            print(f"Loaded dataset for model {model_name} from {model_dataset_path}")
+
+    # Combine all the loaded datasets into a DatasetDict
+    combined_dataset_dict = DatasetDict(dataset_dict)
+
+    if tasks and len(tasks) == 1:
+        combined_dataset_dict = combined_dataset_dict[tasks[0]]
+
+    return combined_dataset_dict
+
+
 def _load_dataset(dataset_name, **kwargs):
     """
     Load the dataset based on the given dataset name.
@@ -159,10 +193,10 @@ def _load_dataset(dataset_name, **kwargs):
         # Assuming wt.lang_datasets_exp1 is available in the scope where this function is called
         return load_ds_translation(**kwargs)
     elif dataset_name == "wmt09_gens":
-        return load_from_disk(os.path.join(CACHE_DIR, dataset_name))
+        return load_wmt09_gens(**kwargs)
     elif dataset_name == "europarl":
         return load_europarl(**kwargs)
-    elif dataset_name == "trivia_qa":
+    elif dataset_name == "triviaqa":
         return load_trivia_qa(**kwargs)
     elif dataset_name == "sciq":
         return {"sciq": load_from_disk(f"{CACHE_DIR}/sciq_converted")}
@@ -351,12 +385,82 @@ class BasePaths:
     base_ngram_paths = {
         "mmlu": {
             # "base_path": "./results/n-grams/mmlu/pile/exp4_nofilter/test-set/exp_full_None",
-            "base_path": "./results/n-grams/mmlu/pile/exp4_filter/test-set/exp_full_None"
+            "pile": {"base_path": "./results/n-grams/mmlu/pile/exp4_filter/test-set/exp_full_None"},
+            "dolma": {"base_path": "./results/n-grams/mmlu/dolma/exp4_infini/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse"},
+            "tasks": [
+                        'abstract_algebra',
+                        'anatomy',
+                        'astronomy',
+                        'business_ethics',
+                        'clinical_knowledge',
+                        'college_biology',
+                        'college_chemistry',
+                        'college_computer_science',
+                        'college_mathematics',
+                        'college_medicine',
+                        'college_physics',
+                        'computer_security',
+                        'conceptual_physics',
+                        'econometrics',
+                        'electrical_engineering',
+                        'elementary_mathematics',
+                        'formal_logic',
+                        'global_facts',
+                        'high_school_biology',
+                        'high_school_chemistry',
+                        'high_school_computer_science',
+                        'high_school_european_history',
+                        'high_school_geography',
+                        'high_school_government_and_politics',
+                        'high_school_macroeconomics',
+                        'high_school_mathematics',
+                        'high_school_microeconomics',
+                        'high_school_physics',
+                        'high_school_psychology',
+                        'high_school_statistics',
+                        'high_school_us_history',
+                        'high_school_world_history',
+                        'human_aging',
+                        'human_sexuality',
+                        'international_law',
+                        'jurisprudence',
+                        'logical_fallacies',
+                        'machine_learning',
+                        'management',
+                        'marketing',
+                        'medical_genetics',
+                        'miscellaneous',
+                        'moral_disputes',
+                        'moral_scenarios',
+                        'nutrition',
+                        'philosophy',
+                        'prehistory',
+                        'professional_accounting',
+                        'professional_law',
+                        'professional_medicine',
+                        'professional_psychology',
+                        'public_relations',
+                        'security_studies',
+                        'sociology',
+                        'us_foreign_policy',
+                        'virology',
+                        'world_religions'
+                    ],
         },
         "arithmetic": {
-            "base_path": "./results/n-grams/arithmetic/pile/exp1/unchanged_operator/n_samples_None_fkeyTrue_rkeyFalse_fstopFalse_onlyalphaFalse"
+            "base_path": "./results/n-grams/arithmetic/pile/exp1/unchanged_operator/n_samples_None_fkeyTrue_rkeyFalse_fstopFalse_onlyalphaFalse",
+            "tasks": ['wmt09-cs-en', 'wmt09-de-en', 'wmt09-fr-en', 'wmt09-es-en', 'wmt09-it-en', 'wmt09-hu-en',
+                      'wmt09-en-cs', 'wmt09-en-de', 'wmt09-en-fr', 'wmt09-en-es', 'wmt09-en-it', 'wmt09-en-hu']
+        },
+        "triviaqa": {
+            "base_path": "./results/n-grams/trivia_qa/pile/exp_3/test-set/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse"
+        },
+        "sciq": {
+            "base_path": " ", 
+        },
+        "translation": {
+            "tasks" : ['cs-en', 'de-en', 'fr-en', 'es-en', 'it-en', 'hu-en']
         }
-
     }
 
     base_results_paths = {
@@ -404,11 +508,15 @@ class DataConfigs:
             'text_1': 'translation',
             'text_2': 'translation'
         },
+        'wmt09_gens': {
+            'text_1': ['translation', 'src'],
+            'text_2': ['translation', 'gen']
+        },
         'europarl': {
             'text_1': 'translation',
             'text_2': 'translation'
         },
-        'trivia_qa': {
+        'triviaqa': {
             'text_1': 'question',
             'text_2': ['answer', 'value'],
             'split': 'validation'
@@ -456,7 +564,10 @@ class DataConfigs:
             ],
             'professional': [
                     'professional_psychology', # use no filtering
-                    'professional_law' # use no filtering
+                    'professional_law' # use no filtering,
+                    'nutrition',
+                    'public_relations'
+
             ],
             'other': [
                 'business_ethics',
@@ -464,7 +575,14 @@ class DataConfigs:
             ],
             'psychology': [
                 'high_school_psychology'
-            ],           
+            ],
+            'top_diff_sft_olmo': [
+                'marketing',
+                'management',
+                'high_school_world_history',
+                'high_school_european_history',
+                'miscellaneous'      
+            ]
         }
 
 
@@ -535,7 +653,8 @@ class WimbdTasks:
         return ' '.join(stopwords)
 
     def process_text(self, text, lang, n_gram, 
-                     filter_stopwords=False, only_alpha=False):
+                     filter_stopwords=False, only_alpha=False,
+                     filter_punc=False):
         if isinstance(text, (int, float)):
             text = str(text)
         if isinstance(text, list):
@@ -544,6 +663,10 @@ class WimbdTasks:
         
         # text = re.sub(r'\d+', '', text)  # Remove numbers
         text = text.strip() # remove leading spaces
+
+        if filter_punc:
+            text = re.sub(r'[^\w\s]', '', text)  # Remove punctuation
+        
         # Filter out stop words
         if filter_stopwords:
             text = text.lower()
@@ -583,13 +706,14 @@ class WimbdTasks:
 
     def get_combinations(self, text_1, text_2, language_pair, n_gram=2,
                          no_split_text2=False, filter_stopwords=False, 
-                         only_alpha=False):
+                         only_alpha=False, filter_punc=True):
         
         full_lang_1_name = self.get_language_name(language_pair[0])
         full_lang_2_name = self.get_language_name(language_pair[1])
         
         text_1_gram = self.process_text(text_1, full_lang_1_name, n_gram,
                                         filter_stopwords=filter_stopwords, 
+                                        filter_punc=filter_punc,
                                         only_alpha=only_alpha)
         if no_split_text2:
             text_2_gram = text_2
@@ -609,14 +733,19 @@ class WimbdTasks:
 
         # filter out combinations that contain the same n-gram
         text_combinations = [combination for combination in text_combinations if combination[0] != combination[1]]
-
+        
         # align lang pairs 
         if language_pair[0] != language_pair[1]:
+            if n_gram <= 2:
+                threshold = 0.6
+            else:
+                threshold = 0.9
             text_combinations = self.align_lang_pairs(text_combinations, 
                                                       language_pair[0], 
                                                       language_pair[1],
-                                                      threshold=0.6)
-            
+                                                      threshold=threshold)
+        
+        text_combinations = tuple(text_combinations)
         return text_combinations
 
     def get_language_name(self, lang_code):
@@ -777,40 +906,33 @@ class WimbdAnalysis:
         
         return filtered_df
     
-    def align_lang_pairs_df(self, df, lang_1, lang_2, threshold=0.7):
+    def align_lang_pairs_df(self, df, lang_1, lang_2):
         """
-        Filter out rows in a DataFrame where the similarity between the two languages
-        is below a certain threshold.
+        Add a new column to the DataFrame with the similarity score between two languages.
 
         Args:
         - df (pd.DataFrame): The input DataFrame.
         - lang_1 (str): The name of the first language column.
         - lang_2 (str): The name of the second language column.
-        - threshold (float): The minimum similarity threshold to keep a row.
 
         Returns:
-        - pd.DataFrame: The filtered DataFrame.
+        - pd.DataFrame: The DataFrame with the new similarity score column.
         """
 
-        def apply_laser_similarity(row):
-            similarity = self.wt.laser_similarity(row[lang_1], lang_1, row[lang_2], lang_2)
-            return similarity > threshold
+        def calculate_laser_similarity(row):
+            return self.wt.laser_similarity(row[lang_1], lang_1, row[lang_2], lang_2)
 
-        filtered_df = df.progress_apply(apply_laser_similarity, axis=1)
+        # Apply the similarity function to each row to create a new column with the scores
+        df['alignment_score'] = df.progress_apply(calculate_laser_similarity, axis=1)
 
-        # calculate how many rows were filtered
-        len_before = len(df)
-        len_after = len(filtered_df)
-        print(f"alignied pairs, before: {len_before}, after: {len_after}, diff: {len_before - len_after}")
-
-        return df[filtered_df]
+        return df
 
 
     def prepare_ngram_df(self, n_gram_freqs_path, is_all=False, 
                         filter_chars=False, detect_lang=False,
                         percentile=0.95, n_gram=None, filter_entities=False,
                         align_langs=0, filter_stopwords=False, remove_english=True,
-                        remove_non_english=False):
+                        remove_non_english=False, **kwargs):
 
         def find_english_column(df, languages):
             if 'index' in df.columns:
@@ -827,6 +949,8 @@ class WimbdAnalysis:
         languages = self.extract_language_pair(n_gram_freqs_path.split("/")[-1])
 
         df = pd.DataFrame(n_gram_freqs).T
+        if kwargs.get("debug"):
+            df = df.iloc[:1000]
         df['coverage'] = self.calc_coverage(df)
         
         non_english_lang = languages[0] if languages[0] != 'en' else languages[1]
@@ -868,11 +992,12 @@ class WimbdAnalysis:
                 df = drop_rows_with_stopwords(df, en_lang_col_name)
 
         if detect_lang:
+            print(f"detecting langs!")
             target_column = non_english_lang if non_english_lang in df.columns else "index"
             df = filter_by_language(df, non_english_lang, target_column)
         
         if filter_entities:
-            # print(f"filtering entitites!")
+            print(f"filtering entitites!")
             # print(f"df: {df}")
             print(f"df.columns: {df.columns}")
             chosen_column = en_lang_col_name if en_lang_col_name in df.columns else other_lang_col_name
@@ -882,8 +1007,7 @@ class WimbdAnalysis:
                 df = self.filter_rows_with_names_and_places(df, other_lang_col_name)
         
         if align_langs > 0:
-            df = self.align_lang_pairs_df(df, languages[0], languages[1],
-                                          threshold=align_langs)
+            df = self.align_lang_pairs_df(df, languages[0], languages[1])
         
         df['task'] = f"{languages[0]}-{languages[1]}"
 
@@ -905,33 +1029,26 @@ class WimbdAnalysis:
     
     def prepare_ngram_df_(self, n_gram_freqs_path, is_all=False, 
                           filter_chars=False, detect_lang=False, 
-                          remove_outliers=False):
-        with open(n_gram_freqs_path, "rb") as f:
-            n_gram_freqs = pickle.load(f)
-        n_gram_freqs = dict(sorted(n_gram_freqs.items(), key=lambda item: item[1]['value'], reverse=True))
-        task = n_gram_freqs_path.split("/")[-1].split(".")[0]
-        df = pd.DataFrame(n_gram_freqs).T
+                          percentile=0):
+     
+        df = pd.read_pickle(n_gram_freqs_path)
+        if isinstance(df, list):
+            df = df[0]
+        
+        df = pd.DataFrame(df).T.sort_values("value", ascending=False)
         df['coverage'] = self.calc_coverage(df)
         # df = df[df['value'] > 0]
         df_0 = df[df['value'] > 0]
         df = df.reset_index().rename(columns={"level_0": "Q", "level_1": "A"})
-        
-        if remove_outliers:
-            # Remove outliers
-            non_zero_vals = df[df['value'] > 0]
-            non_zero_vals_mean = non_zero_vals['value'].mean()
-            non_zero_vals_std = non_zero_vals['value'].std()
-            df = df[df['value'] < non_zero_vals_mean + 0.5 * non_zero_vals_std]
 
-        if filter_chars:
-            df = self.filter_by_language(df, target_language)
-        if detect_lang:
-            df = self.check_language_df(df, target_language)
-
-        return n_gram_freqs, df
+        if percentile > 0:
+            df = filter_percentile(df, percentile)
+    
+        return df
 
     def load_lang_paths(self, files, lang_pairs):
         # Prepare the patterns for matching both 'cs-en' and "('cs', 'en').pkl" formats
+        print(f"lang_pairs: {lang_pairs}")
         patterns = ['-' .join(lang) for lang in lang_pairs] + \
                    [f"({repr(lang[0])}, {repr(lang[1])}).pkl" for lang in lang_pairs]
         
@@ -946,8 +1063,10 @@ class WimbdAnalysis:
             assert len(file) == 1, f"file: {file} not found, or found multiple times"
             return file[0]
         
+        print(f"datasets: {datasets}")
         lang_pairs = [lang.split('-')[-2:] for lang in datasets]
         files = [file for file in os.listdir(base_path) if file.endswith(".pkl")]
+        print(f"lang_pairs: {lang_pairs}")
         files = self.load_lang_paths(files, lang_pairs)
         lang_dfs = {}
         for lang_pair in lang_pairs:
@@ -968,19 +1087,32 @@ class WimbdAnalysis:
         return lang_dfs, save_pth
     
     def get_task_dfs(self, base_path, datasets, **kwargs):
+        if not isinstance(datasets, list):
+            datasets = [datasets]
+
         files = [file for file in os.listdir(base_path) if file.endswith(".pkl")]
-        files = [file for file in files if any([dataset in file for dataset in datasets])]
+        files = [file for file in files if any(dataset in file for dataset in datasets)]
         task_dfs = {}
 
         for file in files:
             print(f"processing {file}")
-            n_gram_freqs, df_clean = self.prepare_ngram_df_(os.path.join(base_path, file), **kwargs)
+            df_clean = self.prepare_ngram_df_(os.path.join(base_path, file), **kwargs)
+            print(f"df_clean {df_clean}")
             task = remove_string(file.split("/")[-1].split(".")[0])
             task_dfs[task] = df_clean
             # export
             df_clean.to_csv(os.path.join(base_path, f"{file}.csv"), index=False)
+        
+        # save task_dfs
+        kwarg_string = '_'.join(f"{key}{value}" for key, value in kwargs.items())
+        filename = f"task_df_{kwarg_string}.pkl"
+        save_pth = os.path.join(base_path, filename)
+        with open(save_pth, "wb") as f:
+            pickle.dump(task_dfs, f)
+        
+        print(f"saved file: {save_pth}")
 
-        return task_dfs
+        return task_dfs, save_pth
 
     def load_all(self, ext="all.pkl.csv"):
         files = [file for file in os.listdir(self.base_path_all) if file.endswith(ext)]
@@ -1318,6 +1450,8 @@ class WimbdAnalysis:
                 lang_df = lang_df[lang_df['task'] == dataset]
                 n_samples = lang_df['value'].sum()
                 coverage = lang_df['coverage'].mean() if 'coverage' in lang_df else 0
+                print(f"dataset: {dataset}, model: {model}, n_samples: {n_samples}, coverage: {coverage}")
+                print(f"bleu scores: {bleu_scores.keys()}")
                 score = bleu_scores[dataset][model]
                 model_scores[model]['score'].append(score)
                 model_scores[model]['n_samples'].append(n_samples)
@@ -1470,9 +1604,6 @@ def post_filter(df):
         if 'answer' in df.iloc[0]['example']:
                 df['answer'] = df['example'].apply(lambda x: x['choices'][x['answer']])
 
-
-
-
     # # Drop rows where 'A' does not match the 'gold' label
     # df = df[df['A'] == df['gold']]
 
@@ -1570,50 +1701,257 @@ def display_language_pairs(lang_dfs_dict, language_pairs=None, rows=500):
 
 
 # def align_pairs(df):
-def align_pairs_e5(df, col1, col2, threshold=0.7):
+
+def align_pairs_e5(text_1, text_2, threshold=0.7, gpu=None):
     """
-    align pairs using e5 embeddings
-    df: pandas dataframe
-    col1, col2: the column names to be aligned
+    Align pairs using e5 embeddings
+    text_1, text_2: lists of texts to be aligned
     """
     import torch
     import torch.nn.functional as F
     from transformers import AutoTokenizer, AutoModel
-    
-    def average_pool(last_hidden_states: Tensor,
-                     attention_mask: Tensor) -> Tensor:
+
+    device = torch.device(f"cuda:{gpu}" if torch.cuda.is_available() \
+                            and gpu is not None else "cpu")
+
+    if not isinstance(text_1, list):
+        text_1 = [text_1]
+    if not isinstance(text_2, list):
+        text_2 = [text_2]
+
+    def average_pool(last_hidden_states, attention_mask):
         last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
         return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
     
-    querries = ['query: ' + query for query in df[col1]]
-    passages = ['passage: ' + passage for passage in df[col2]]
-    input_text = querries + passages
+    with torch.no_grad():
 
-    tokenizer = AutoTokenizer.from_pretrained('intfloat/e5-large-v2')
-    model = AutoModel.from_pretrained('intfloat/e5-large-v2')
+        querries = ['query: ' + query for query in text_1]
+        passages = ['passage: ' + passage for passage in text_2]
 
-    batch = tokenizer(input_text, max_length=512, padding=True, truncation=True, return_tensors='pt')
-    outputs = model(**batch)
+        input_text = querries + passages
 
-    embeddings = average_pool(outputs.last_hidden_state, batch['attention_mask'])
-    embeddings = F.normalize(embeddings, p=2, dim=1)
+        tokenizer = AutoTokenizer.from_pretrained('intfloat/e5-large-v2')
+        model = AutoModel.from_pretrained('intfloat/e5-large-v2').to(device)
+        model.eval()
 
-    num_pairs = min(len(querries), len(passages))
-    scores = (embeddings[:num_pairs] @ embeddings[num_pairs:].T)
-    corresponding_scores =  scores.diag().cpu().numpy() * 100  # Extract the diagonal and scale by 100
+        batch = tokenizer(input_text, max_length=512, padding=True, 
+                          truncation=True, return_tensors='pt').to(device)
+        outputs = model(**batch)
+        embeddings = average_pool(outputs.last_hidden_state, batch['attention_mask'])
+        embeddings = F.normalize(embeddings, p=2, dim=1)
+
+        num_pairs = min(len(querries), len(passages))
+
+        scores = (embeddings[:num_pairs] @ embeddings[num_pairs:].T)
+        corresponding_scores = scores.diag().cpu().detach().numpy() * 100  # Extract the diagonal and scale by 100
 
     return corresponding_scores
 
 
+class ProcessTriviaQA:
 
+    @staticmethod
+    def check_exact_match(row):
+        if pd.isna(row['result']) or pd.isna(row['answer']):
+            return False
+        aliases = row['answer'].get('aliases', [])
+        normalized_result = normalize_string(row['result'])
+        return int(any(normalize_string(alias) == normalized_result for alias in aliases))
 
+    @staticmethod
+    def process_model_examples(df_dict, p=0.9999):
+        # df_dict = {model: data.iloc[:10] for model, data in df_dict.items()}
+        df_dict = {model: filter_percentile(data, p) for model, data in df_dict.items()}
+        df_dict = {model: remove_nested_lists(data) for model, data in df_dict.items()}
+        df_dict = {model: ProcessTriviaQA.create_exact_match_column(data) for model, data in df_dict.items()}
+        df_0 = df_dict[list(df_dict.keys())[0]]
+        df_aligned = ProcessTriviaQA.calculate_alignment_scores(df_0, gpu=3)
+        # df_dict = {model: data.iloc[keep_indices] for model, data in df_dict.items()}
+        df_dict = {model: data.assign(align_score=df_aligned['align_score']) for model, data in df_dict.items()}
+        return df_dict
 
+    @staticmethod
+    def create_exact_match_column(examples):
+        examples['em'] = examples.progress_apply(ProcessTriviaQA.check_exact_match, axis=1)
+        return examples
     
+    @staticmethod
+    def calculate_alignment_scores(df, batch_size=256, gpu=None):
+        """
+        Calculate the alignment scores between 'Q' and 'Question' columns and add them as a new column 'align_score'.
+        Drop rows where the alignment score falls below the threshold.
+        
+        :param df: pandas DataFrame containing the data
+        :param threshold: minimum alignment score required:param batch_size: number of pairs to process in each batch (default: 32)
+        :return: tuple containing the modified DataFrame with 'align_score' column and the indices of the kept rows
+        """
+        from tqdm import tqdm  # Import tqdm for progress bar functionality
 
+        # Get the total number of rows
+        num_rows = len(df)
 
+        # Initialize an array to store the alignment scores
+        alignment_scores = np.zeros(num_rows)
 
+        # Initialize a progress bar
+        pbar = tqdm(total=num_rows, desc='Calculating alignment scores')
 
+        # Process the rows in batches
+        for i in range(0, num_rows, batch_size):
+            # Update the progress bar with the number of rows processed
+            pbar.update(min(batch_size, num_rows - i))
 
+            # Get the batch of 'Q' and 'Question' columns
+            batch_text_1 = df['Q'][i:i+batch_size].tolist()
+            batch_text_2 = df['question'][i:i+batch_size].tolist()
+
+            # Calculate the alignment scores for the batch
+            batch_scores = align_pairs_e5(batch_text_1, batch_text_2, gpu=gpu)
+
+            # Store the batch scores in the alignment_scores array
+            alignment_scores[i:i+batch_size] = batch_scores
+
+        # Close the progress bar
+        pbar.close()
+
+        # Add the alignment scores as a new column 'align_score' to the DataFrame
+        df['align_score'] = alignment_scores
+
+        # Create a boolean mask indicating which rows to keep
+        # print(f"Threshold is: {threshold}")
+        # keep_rows = df['align_score'] >= threshold
+        # kept_indices = df.index[keep_rows].tolist()
+        # df_filtered = df.iloc[kept_indices]
+
+        # print the number of rows kept and dropped and percentage
+        # num_kept = len
+        # num_dropped = num_rows - num_kept
+        # print(f"Kept {num_kept} rows and dropped {num_dropped} rows ({num_dropped / num_rows:.2%})")
+
+        return df
+    
+    @staticmethod
+    def get_random_samples_by_interval(df, sample_size, column='interval'):
+        # Remove rows with missing column values
+        df = df.dropna(subset=[column])
+
+        # Convert column to string type
+        df[column] = df[column].astype(str)
+
+        # Create an empty list to store the random samples
+        samples_list = []
+
+        # Get the unique log intervals
+        intervals = df[column].unique()
+
+        # Iterate over each interval
+        for interval in intervals:
+            # Get the rows corresponding to the current interval
+            interval_df = df[df[column] == interval]
+
+            # Check if the interval has enough samples
+            if len(interval_df) >= sample_size:
+                # Select random samples from the interval
+                samples = interval_df.sample(n=sample_size)
+                samples_list.append(samples)
+            else:
+                print(f"Interval {interval} does not have enough samples. Skipping.")
+
+        # Concatenate the random samples into a single DataFrame
+        samples_df = pd.concat(samples_list, ignore_index=True)
+
+        return samples_df
+    
+    @staticmethod
+    def plot_variable_by_interval(df, x_column, y_column, 
+                                  log_axis=False, save_pth=None, 
+                                  ax=None, color=None, label=None,
+                                  title=None, x_label=None,
+                                  plot_scatter=False, plot_std=False):
+        
+        # Check if the columns exist in the DataFrame
+        if x_column not in df.columns or y_column not in df.columns:
+            raise ValueError(f"Columns {x_column} and/or {y_column} not found in DataFrame")
+
+        # Remove rows with missing values in the specified columns
+        df = df.dropna(subset=[x_column, y_column])
+
+        # Convert the x_column to string type if not already
+        df[x_column] = df[x_column].astype(str)
+
+        # Extract the numeric value for the x_column if it's an interval
+        if any(char in df[x_column].iloc[0] for char in '[]()'):
+            df['interval_start'] = df[x_column].apply(lambda x: float(x.split(',')[0].strip('[](-∞ ')))
+            x_values = 'interval_start'
+        else:
+            x_values = x_column
+
+        # Group by the x_column and calculate the mean for the y_column
+        avg_by_x = df.groupby(x_column)[y_column].mean()
+
+        # Create a new DataFrame with x_values and the average of y_column
+        avg_df = pd.DataFrame({x_values: df.groupby(x_column)[x_values].first(),
+                               'avg_y': avg_by_x})
+
+        # Sort the DataFrame based on x_values
+        avg_df = avg_df.sort_values(x_values)
+
+        print(f"avg_df = {avg_df}")
+        print(f"avg_y: {avg_df['avg_y']}")
+
+        # Create a new figure and axis if ax is not provided
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(10, 6))
+
+        # Create a line plot on the provided or new axis
+        ax.plot(avg_df[x_values], avg_df['avg_y'], marker='o', color=color, label=label)
+        ax.set_xlabel(x_column)
+        ax.set_ylabel(f'Average {y_column}')
+        ax.set_title(f'Average {y_column} by {x_column}')
+
+        # Optionally plot standard deviation
+        if plot_std:
+            # Group by the x_column and calculate the standard deviation for the y_column
+            std_by_x = df.groupby(x_column)[y_column].std()
+
+            # Assuming avg_df is already sorted by x_values
+            # Plot the standard deviation as a shaded area around the mean line
+            ax.fill_between(avg_df[x_values], 
+                            avg_df['avg_y'] - std_by_x.values, 
+                            avg_df['avg_y'] + std_by_x.values, 
+                            color=color, alpha=0.05)
+
+        # optionally plot the individual points
+        if plot_scatter:
+            ax.scatter(df[x_column], df[y_column], color=color, alpha=0.5)
+
+        if log_axis:
+            ax.set_xscale('log')
+        
+        if title is not None:
+            ax.set_title(title)
+        
+        if x_label is None:
+            ax.set_xlabel('# N-grams')
+        else:
+            ax.set_xlabel(x_label)
+        ax.set_ylabel('Performance')
+
+        # Make the legend flat and position it at the bottom
+        ncol = len(ax.lines) // 3
+        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), 
+                  ncol=ncol if ncol >= 1 else 1)
+
+        plt.tight_layout(rect=[0, 0.15, 1, 1])  # Adjust the bottom space for the legend
+
+        if save_pth is not None:
+            os.makedirs(os.path.dirname(save_pth), exist_ok=True)
+            plt.savefig(save_pth, bbox_inches='tight')  # Save the figure with the legend
+            print(f"Saved figure in {save_pth}")
+
+        # Return the axis object
+        return ax
+    
 
 
 # %%

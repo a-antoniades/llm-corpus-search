@@ -8,72 +8,72 @@
 # LANG_PAIRS = cs_en de_en fr_en es_en it_en hu_en
 # LANG_PAIRS = en_cs en_de en_fr en_es en_it en_hu
 
-# # europarl
-# LANG_PAIRS = cs_en en_fr de_en en_hu en_es en_it
+# europarl
+LANG_PAIRS = cs_en en_fr de_en en_hu en_es en_it
 
-# N_GRAMS = 5
-
-
-# # Define the all rule
-# all:
-# 	GPU=6; \
-# 	for pair in $(LANG_PAIRS); do \
-# 		SESSION_NAME=$$(echo $$pair-$(N_GRAMS) | tr -d ' '); \
-# 		LANG1=$$(echo $$pair | cut -d'_' -f1); \
-# 		LANG2=$$(echo $$pair | cut -d'_' -f2); \
-# 		echo "Killing any existing session named $$SESSION_NAME"; \
-# 		tmux kill-session -t $$SESSION_NAME || true; \
-# 		echo "Running script with language pair $$LANG1 $$LANG2 on GPU $$GPU"; \
-# 		tmux new-session -d -s $$SESSION_NAME 'bash -c "\
-# 		CUDA_VISIBLE_DEVICES=6 \
-# 		python wimbd_search.py \
-# 			--type infini \
-# 			--corpus pile \
-# 			--n_grams $(N_GRAMS) \
-# 			--dataset europarl \
-# 			--n_samples 20000 \
-# 			--language_pair '$$LANG1' '$$LANG2' \
-# 			--corpus pile \
-# 			--filter_stopwords false \
-# 			--filter_keywords false \
-# 			--replace_keywords false \
-# 			--only_alpha true \
-# 			--get_docs false \
-# 			--name exp4/"' & \
-# 		GPU=$$(( (GPU+1) % 8 )); \
-# 	done
-# .PHONY: all
-
-# mmlu
-DATASET = sciq # mmlu # trivia_qa
-CORPUS = dolma
-N_GRAMS = 5
-NAME = exp4_infini/
-N_SAMPLES = None
+N_GRAMS = 4
 
 # Define the all rule
 all:
-	GPU=7; \
-	echo "Running script with ngram $(N_GRAMS) on GPU $$GPU"; \
-	SESSION_NAME=$$(echo "wimbd-$(DATASET)-$(CORPUS)-$(N_GRAMS)-$(N_SAMPLES)" | tr -d ' '); \
-	echo "Killing any existing session named $$SESSION_NAME"; \
-	tmux kill-session -t $$SESSION_NAME || true; \
-	tmux new-session -d -s $$SESSION_NAME 'bash -c "\
-	CUDA_VISIBLE_DEVICES="" \
-	python wimbd_search.py \
-	--type infini \
-	--corpus $(CORPUS) \
-	--n_grams $(N_GRAMS) \
-	--dataset $(DATASET) \
-	--filter_stopwords true \
-	--filter_keywords false \
-	--replace_keywords false \
-	--corpus $(CORPUS) \
-	--only_alpha false \
-	--name \"$(NAME)\"; exec bash"' & \
-	GPU=$$(( (GPU+2) % 8 )); \
-
+	GPU=6; \
+	for pair in $(LANG_PAIRS); do \
+		SESSION_NAME=$$(echo $$pair-$(N_GRAMS) | tr -d ' '); \
+		LANG1=$$(echo $$pair | cut -d'_' -f1); \
+		LANG2=$$(echo $$pair | cut -d'_' -f2); \
+		echo "Killing any existing session named $$SESSION_NAME"; \
+		tmux kill-session -t $$SESSION_NAME || true; \
+		echo "Running script with language pair $$LANG1 $$LANG2 on GPU $$GPU"; \
+		tmux new-session -d -s $$SESSION_NAME bash -c "\
+		CUDA_VISIBLE_DEVICES=$$GPU \
+		python wimbd_search.py \
+			--type infini \
+			--corpus pile \
+			--n_grams $(N_GRAMS) \
+			--dataset wmt \
+			--language_pair '$$LANG1' '$$LANG2' \
+			--filter_stopwords false \
+			--filter_keywords false \
+			--replace_keywords false \
+			--only_alpha true \
+			--get_docs false \
+			--name exp4/"; \
+		GPU=$$(( (GPU+1) % 8 )); \
+	done
 .PHONY: all
+
+# # mmlu
+# DATASET = triviaqa # sciq # mmlu
+# CORPUS = pile # dolma
+# N_GRAMS = 2
+# NAME = exp_3/validation-set
+# N_SAMPLES = 20000
+
+# # Define the all rule
+# all:
+# 	GPU=""; \
+# 	echo "Running script with ngram $(N_GRAMS) on GPU $$GPU"; \
+# 	SESSION_NAME=$$(echo "wimbd-$(DATASET)-$(CORPUS)-$(N_GRAMS)-$(N_SAMPLES)" | tr -d ' '); \
+# 	echo "Killing any existing session named $$SESSION_NAME"; \
+# 	tmux kill-session -t $$SESSION_NAME || true; \
+# 	tmux new-session -d -s $$SESSION_NAME 'bash -c "\
+# 	CUDA_VISIBLE_DEVICES="" \
+# 	python wimbd_search.py \
+# 	--type infini \
+# 	--corpus $(CORPUS) \
+# 	--n_grams $(N_GRAMS) \
+# 	--dataset $(DATASET) \
+# 	--filter_punc true \
+# 	--filter_stopwords true \
+# 	--filter_keywords false \
+# 	--replace_keywords false \
+# 	--corpus $(CORPUS) \
+# 	--only_alpha false \
+# 	--method common \
+# 	--name \"$(NAME)\"; exec bash"' & \
+# 	GPU=$$(( (GPU+2) % 8 )); \
+
+# .PHONY: all
+
 
 # --delimeter \" = \" \
 # bigbench

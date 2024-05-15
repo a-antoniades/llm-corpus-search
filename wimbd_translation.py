@@ -147,6 +147,7 @@ if __name__ == "__main__":
             # save as .pkl, specify language and n_gram amount)
             with open(os.path.join(save_path, filename), 'wb') as f:
                 pickle.dump(dict(n_gram_freqs), f)
+                
     if args.method == "all" or do_all:
         print(f"/// Running all method ///")
         save_path = f"{base_path}/all/"

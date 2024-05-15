@@ -12,7 +12,6 @@ from distutils.util import strtobool
  
 from elasticsearch import Elasticsearch
 from wimbd.es import get_documents_containing_phrases
-from src.infini_search import count_documents_containing_phrases
 from src.utils import running_jupyter
 
 from transformers import set_seed
@@ -67,6 +66,7 @@ def parse_args():
         parser.add_argument("--no_split_text2", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable splitting of text2")
         parser.add_argument("--filter_keywords", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable filtering of keywords")
         parser.add_argument("--filter_stopwords", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable filtering of stopwords")
+        parser.add_argument("--filter_punc", type=lambda x: bool(strtobool(x)), default=True)
         parser.add_argument("--replace_keywords", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable filtering of kewywords")
         parser.add_argument("--only_alpha", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable filtering of non-alphabetic characters")
         parser.add_argument("--delimeter", type=str, default=" ", help="Delimeter to use for splitting text")
@@ -80,12 +80,15 @@ def main(args):
         base_path = os.path.join(base, f"./exp_3/test-set")
     else:
         base_path = os.path.join(base, args.name)
+    if args.tasks is not None:
+        base_path = os.path.join(base_path, *args.tasks)
     settings = f"fkey{args.filter_keywords}_rkey{args.replace_keywords}_fstop{args.filter_stopwords}_onlyalpha{args.only_alpha}"
     save_path = f"{base_path}/n_samples_{str(args.n_samples)}_{settings}/{str(args.n_grams)}/{args.method}"
     if not os.path.exists(save_path) and not args.debug:
         os.makedirs(save_path)
 
     if args.type == 'wimbd':
+        from wimbd.es import count_documents_containing_phrases
         if args.corpus == 'pile':
             index = 're_pile'
             cloud_id = "m-datasets:dXMtY2VudHJhbDEuZ2NwLmNsb3VkLmVzLmlvJDk1N2U5ODIwZDUxNTQ0YWViMjk0MmQwNzI1NjE0OTQ2JDhkN2M0OWMyZDEzMTRiNmM4NDNhNGEwN2U4NDE5NjRl"
@@ -102,16 +105,25 @@ def main(args):
             retry_on_timeout=True,
             http_compress=True)
     elif args.type == 'infini':
+        from src.infini_search import count_documents_containing_phrases
         if args.corpus == 'dolma':
             index = "v4_dolma-v1_6_llama"
             es = None
         elif args.corpus == 'pile':
             index = "v4_piletrain_llama"
             es = None
-
+    elif args.type == 'rust':
+        from src.rust_search import count_documents_containing_phrases
+        if args.corpus == 'tuluv2':
+            index = 'tuluv2'
+            es = None
+    else:
+        raise ValueError(f"Method {args.type} not recognized")
 
     wt = WimbdTasks()
+    print(f"type: {args.type}, index: {index}, corpus: {args.corpus}")
 
+    print(f"tasks: {args.tasks}")
     print(f"dataset: {args.dataset}")
     args.language_pair = tuple(args.language_pair)
     args.tasks = args.tasks
@@ -119,7 +131,8 @@ def main(args):
     ds = _load_dataset(
         args.dataset, 
         tasks=args.tasks,
-        languages=[args.language_pair]
+        languages=[args.language_pair],
+
     )
     print(f"dataset keys: {ds.keys()}")
 
@@ -176,14 +189,17 @@ def main(args):
             dataset_keys = DataConfigs.data_keys[args.dataset]
 
             if args.dataset in ["wmt", "europarl"]:
-                keys_1 = ['translation', args.language_pair[0]]
-                keys_2 = ['translation', args.language_pair[1]]
-                text_1 = get_nested_value(example, keys_1)
-                text_2 = get_nested_value(example, keys_2)
+                text_1_key = ['translation', args.language_pair[0]]
+                text_2_key = ['translation', args.language_pair[1]]
+            elif args.dataset in ["wmt09_gens"]:
+                text_1_key = ['translation', args.language_pair[0]]
+                text_2_key = dataset_keys['text_2']
             else:
                 text_1_key, text_2_key = dataset_keys['text_1'], dataset_keys['text_2']
-                text_1 = get_nested_value(example, text_1_key)
-                text_2 = get_nested_value(example, text_2_key)
+            
+            print(f"example: {example}")
+            text_1 = get_nested_value(example, text_1_key)
+            text_2 = get_nested_value(example, text_2_key)
 
             
             # clean text
@@ -206,6 +222,7 @@ def main(args):
                                                         args.language_pair, args.n_grams,
                                                         no_split_text2=args.no_split_text2,
                                                         filter_stopwords=args.filter_stopwords,
+                                                        filter_punc=args.filter_punc,
                                                         only_alpha=args.only_alpha)
                 if args.debug:
                     print(f"Question: {text_1}, Answer: {text_2}")
@@ -255,16 +272,17 @@ def main(args):
                 ngram_combinations = wt.process_text(text_1, wt.get_language_name(args.language_pair),
                                                      n_gram=args.n_grams,
                                                      filter_stopwords=args.filter_stopwords,
+                                                     filter_punc=args.filter_punc,
                                                      only_alpha=args.only_alpha)
                 print(f"ngram_combinations: {ngram_combinations}")
                 for n_gram in ngram_combinations:
                     success = False
                     while not success:
                         try:
-                            counts = count_documents_containing_phrases(index, [n_gram],
+                            counts = count_documents_containing_phrases(index, (n_gram),
                                                                         es=es, all_phrases=True)
                             if args.get_docs:
-                                docs = get_documents_containing_phrases(index, [n_gram],
+                                docs = get_documents_containing_phrases(index, (n_gram),
                                     es=es, all_phrases=True,
                                     return_all_hits=True)
                             success = True  # If the function call was successful, exit the loop
@@ -307,12 +325,15 @@ def main(args):
 
             coverage.append(example_dict)
 
-            # calculate p_coverage (propotion of ngrams found)
+            # calculate p_coverage (proportion of ngrams found)
             p_coverage.append(n_coverage / len(ngram_combinations) if len(ngram_combinations) > 0 else 0)
-            tasks_left = total_tasks - completed_tasks
             instances_left = len(task_ds_full) - idx
-            print(f"completed instance {idx}, time: {time.time() - start_time}, \
-                    time remaining for task: {instances_left * (time.time() - start_time)}")
+            remaining_time = instances_left * (time.time() - start_time)
+            # Convert time to days/hours/minutes
+            days, remainder = divmod(remaining_time, 24 * 3600)
+            hours, remainder = divmod(remainder, 3600)
+            minutes, _ = divmod(remainder, 60)
+            print(f"completed instance {idx}, remaining: {int(days)}d {int(hours)}h {int(minutes)}m")
             
             # save as .pkl
             if not args.debug:
@@ -322,6 +343,11 @@ def main(args):
                     pickle.dump(coverage, f)
                 with open(os.path.join(save_path, f"task-p-coverage.pkl"), 'wb') as f:
                     pickle.dump(p_coverage, f)
+        
+    # if everything runs smoothly, save "completed flag"
+    if not args.debug:
+        with open(os.path.join(save_path, "completed.txt"), 'w') as f:  # Open in text mode
+            f.write("completed")
 
 
 
@@ -339,18 +365,16 @@ if __name__ == "__main__":
 """
 
 # Example usage for MMLU
-# Example usage for MMLU
 CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
-                        --type infini \
-                        --corpus dolma \
-                        --n_grams 5 \
+                        --type rust \
+                        --corpus tuluv2 \
+                        --n_grams 2 \
                         --dataset mmlu \
                         --filter_stopwords true \
                         --replace_keywords false \
                         --only_alpha false \
-                        --n_samples 500 \
-                        --name exp4_nofilter \
-                        --debug
+                        --name local/all \
+                        --method common
 
                         
 # Example usage for translation
@@ -366,14 +390,28 @@ CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
                         --get_docs false \
                         --debug
 
+# Example usage for translation GENS
+CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
+                        --type infini \
+                        --corpus pile \
+                        --n_grams 2 \
+                        --method common \
+                        --dataset wmt09_gens \
+                        --tasks pythia-12b \
+                        --language_pair en es \
+                        --filter_stopwords false \
+                        --replace_keywords false \
+                        --only_alpha false \
+                        --get_docs false 
+
 
 # Example usage for sciq
 CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
                         --type infini \
                         --corpus pile \
-                        --n_grams 5 \
-                        --dataset sciq \
-                        --filter_stopwords true \
+                        --n_grams 3 \
+                        --dataset triviaqa \
+                        --filter_stopwords false \
                         --replace_keywords false \
                         --only_alpha false \
                         --n_samples 500 \

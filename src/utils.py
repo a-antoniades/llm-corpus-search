@@ -1,9 +1,13 @@
 import os
 import numpy as np
-from transformers import AutoTokenizer, GPT2Tokenizer
-from datasets import load_dataset
+import pandas as pd
+import re
+
 import multiprocessing
 from tqdm import tqdm
+
+from transformers import AutoTokenizer, GPT2Tokenizer
+from datasets import load_dataset
 from transformers import GPT2Tokenizer
 
 def running_jupyter():
@@ -45,6 +49,30 @@ def remove_string(input_value):
     else:
         raise ValueError("input_value must be a string or a tuple of strings")
 
+def normalize_string(text):
+    if pd.isna(text):
+        return ""
+    text = str(text).lower().strip()
+    text = re.sub(r'[^a-z0-9\s]', '', text)  # Remove non-alphanumeric characters
+    text = re.sub(r'\s+', ' ', text)  # Replace multiple spaces with a single space
+    return text
+
+def remove_nested_lists(df):
+    def flatten_element(x):
+        if isinstance(x, (list, np.ndarray)):
+            return flatten_element(x[0])
+        else:
+            return x
+
+    for col in df.columns:
+        # Check if any element in the column is a list or an array
+        if any(isinstance(x, (list, np.ndarray)) for x in df[col]):
+            print(f"Flattening column: {col}")
+            
+            # Apply the recursive flatten_element function to each element in the column
+            df[col] = df[col].apply(flatten_element)
+
+    return df
 
 def group_texts(examples):
         # Concatenate all texts.

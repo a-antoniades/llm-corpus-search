@@ -24,11 +24,116 @@ from src.wimbd_ import WimbdAnalysis, _load_dataset
 from src.utils import remove_string
 
 
+models = ['pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
+        'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
+        'pythia-70m', 'pythia-31m', 'pythia-14m']
+
+# model params
+base_results_config = {
+    "pythia": {
+        "translation": {
+            "paths" : {
+                "0-shot":{
+                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_6_logits_max_5/inference/EleutherAI": [
+                        'pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
+                        'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
+                        'pythia-70m', 'pythia-31m', 'pythia-14m'
+                    ]
+                }
+            }, 
+        },
+        "mmlu": {
+            'paths': {
+                "0-shot": {
+                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/pythia/experiment_4/inference/EleutherAI": [
+                        'pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
+                        'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
+                        'pythia-70m', 'pythia-31m', 'pythia-14m'
+                    ],
+                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/OLMO": [
+                        'OLMo-7b'
+                    ]
+                },
+                "5-shot": {
+                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/EleutherAI" : [
+                        'pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
+                        'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
+                        'pythia-70m', 'pythia-31m', 'pythia-14m'
+                    ],
+                }
+            },
+        },
+        "arithmetic": {
+            "paths" : {
+                "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/EleutherAI": [
+                    'pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
+                    'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
+                    'pythia-70m', 'pythia-31m', 'pythia-14m'
+                ]
+            },
+            "shot": "16-shot"
+        },
+        "translation": {
+            "paths": {
+                "0-shot": {
+                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_6_logits_max_4/inference/EleutherAI" : [
+                            'pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
+                            'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
+                            'pythia-70m', 'pythia-31m', 'pythia-14m'
+                    ],
+                },        
+            },
+            "match_columns": {
+                "instances":"query"
+            }
+        },
+        "triviaqa": {
+            "paths":
+            {
+                "4-shot": {
+                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/EleutherAI": models
+                },
+            },
+            "match_columns":
+            {
+                "instances":"question"
+            }
+        },
+        "sciq": {
+        "paths":
+        {
+            "0-shot": {
+                "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/EleutherAI": models
+            },
+        },
+        "match_columns":
+        {
+            "instances":"question"
+        }
+        }
+    },
+    "olmo": {
+        "mmlu": {
+            'paths': {
+                "0-shot": {
+                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/allenai": [
+                        'OLMo-1B', 'OLMo-7B', 'OLMo-7B-SFT', 'OLMo-7B-Instruct'
+                    ]
+                },
+            },
+        },
+        }   
+    }
+
+
 def parse_args():
     import argparse
     parser = argparse.ArgumentParser(description='WIMBD Analysis')
     parser.add_argument('--dataset', type=str, default="mmlu", help='Dataset to use')
-    parser.add_argument("--ngrams", type=int, nargs='+', default=None)
+    parser.add_argument('--tasks', type=str, nargs='+', default=None)
+    parser.add_argument('--model_type', type=str, help='Model type to use')
+    parser.add_argument('--model_name', nargs='+', default=None, help='Model name')
+    parser.add_argument("--n_grams", type=int, nargs='+', default=None)
     parser.add_argument('--shots', type=int, default=0, help='Number of shots')
     parser.add_argument('--base_dir', type=str, help='Base directory')
     parser.add_argument('--filename', type=str, default=None, help='Filename of preprocessed task_dfs if it exists')
@@ -48,28 +153,29 @@ def nll_to_prob(nll):
 def get_metric(results):
     metrics_to_check = [
         'bleu',
-        'acc'
+        'acc',
+        'em',
     ]
     for metric in metrics_to_check:
         if metric in results:
             return results[metric]
 
 
-def fetch_paths_with_criteria(search_dir, *criteria):
+def fetch_paths_with_criteria(paths, *criteria):
     """
-    Fetch file paths that contain all the given criteria.
+    Fetch file paths from a list that contain all the given criteria.
 
     Args:
-        search_dir (str): The base directory to search in.
-        file_pattern (str): The file pattern to match (e.g., "results.json").
+        paths (list): The list of file paths to search in.
         *criteria (str): Variable length argument list of criteria to match in the file paths.
 
     Returns:
         list: A list of file paths that match all the given criteria.
     """
-    # Use glob to find all files that match the search pattern
-    matching_paths = [path for path in search_dir if all(criterion in path for criterion in criteria)]
-    return matching_paths
+    # Filter paths that match all the given criteria
+    matching_paths = [path for path in paths if all(criterion in path for criterion in criteria)]
+    
+    return matching_paths[0]
 
 
 def process_model_results(base_results_paths, TASK, TASKS, SHOT):
@@ -83,8 +189,10 @@ def process_model_results(base_results_paths, TASK, TASKS, SHOT):
             instance_results_paths = glob.glob(os.path.join(base_results_path, "**", "doc_results.json"), recursive=True)
             for model in models_:
                 # get file that contains model, task and shot
-                result_path = fetch_paths_with_criteria(result_paths, "results.json", model, TASK, SHOT, task)[0]
-                instance_results_path = fetch_paths_with_criteria(instance_results_paths, model, TASK, SHOT, task)[0]
+                # result_path = fetch_paths_with_criteria(result_paths, "results.json", model, TASK, SHOT, task)[0] # for translation this is what worked
+                # instance_results_path = fetch_paths_with_criteria(instance_results_paths, model, TASK, SHOT, task)[0]
+                result_path = fetch_paths_with_criteria(result_paths, "results.json", model, TASK, task, SHOT) # this is for trivia_qa and new tasks (i think)
+                instance_results_path = fetch_paths_with_criteria(instance_results_paths, model, TASK, task, SHOT)
                 results = json.load(open(result_path, 'r'))['results']
                 doc_results = json.load(open(instance_results_path, 'r'))
                 for task in results.keys():
@@ -137,7 +245,9 @@ def process_and_save_results(example_dfs, model_instance_results, base_path, suf
                 example_dfs['gold'] = example_dfs['example'].apply(lambda x: x['answer'])
 
         # convert nll to probs
-        if 'lls' in instances.columns:
+        if 'lls' in instances.columns and \
+            pd.to_numeric(instances['lls'], errors='coerce').notnull().all():
+
             instances['probs'] = instances['lls'].apply(nll_to_prob)
             instances['probs_softmax'] = instances['probs'].apply(softmax) # get normalized probs
 
@@ -153,7 +263,9 @@ def process_and_save_results(example_dfs, model_instance_results, base_path, suf
             examples_dfs_model['probs_softmax_gold'] = examples_dfs_model.apply(
                 lambda row: row['probs_softmax'][row['gold']], axis=1
             )
-        
+        else:
+            examples_dfs_model = example_dfs.merge(instances, on='id', how='inner', suffixes=('', '_drop'))
+
         if 'bleu' in instances.columns:
             # merge on ids
             examples_dfs_model = example_dfs.merge(instances, on='id', how='inner', suffixes=('', '_drop'))
@@ -190,6 +302,7 @@ def process_instance_results(instance_results, task_dfs, label=''):
 
 
 def merge_and_process_dfs(task_dfs):
+    print(f"task_dfs: {task_dfs}")
     example_dfs = pd.concat(task_dfs.values())
     
     # Extract 'query' from the 'example' column, handling both 'question' and 'context'
@@ -250,10 +363,40 @@ def find_matching_rows(df, src_phrase, ref_phrase):
         ]
 
         return fuzzy_match
+
     
+def find_best_match(example, instances_df, instances_key, threshold=80):
+    match = instances_df[
+        instances_df[instances_key].str.contains(
+            re.escape(example),
+            na=False,
+            regex=True,
+            case=False,
+            flags=re.IGNORECASE
+        )
+    ]
 
+    # If no match is found, perform fuzzy matching
+    if match.empty:
+        best_match = process.extractOne(
+            example,
+            instances_df[instances_key],
+            scorer=fuzz.token_set_ratio
+        )
+        print(f"best_match: {best_match}")
 
-def find_matching_id(row, instances_df):
+        # Check if the best match score is above the specified threshold
+        if best_match and best_match[1] > threshold:
+            best_match_index = best_match[2]
+            match = instances_df.iloc[[best_match_index]]
+        else:
+            # Log the unmatched case for review
+            print(f"Example not similar enough")
+            match = pd.DataFrame()
+
+    return match
+
+def find_matching_id(row, instances_df, instances_column=None):
     def find_non_en_key(dict_):
         for n, (k, v) in enumerate(dict_.items()):
             if k != 'en':
@@ -261,60 +404,54 @@ def find_matching_id(row, instances_df):
             
     # Check if the 'query' is a list and has two elements to match against 'src' and 'ref'
     if 'translation' in row['example']:
-        translation = row['example']['translation']
-        langs = list(translation.keys())
-        n_col_key, col_key = find_non_en_key(translation)
+        example_query = row['example']['translation']
+        langs = list(example_query.keys())
+        n_col_key, col_key = find_non_en_key(example_query)
         instances_key = 'src' if n_col_key == 0 else 'ref'
-        match = instances_df[
-            instances_df[instances_key].str.contains(
-                re.escape(translation[col_key]), 
-                na=False, 
-                regex=True, 
-                case=False,
-                flags=re.IGNORECASE
-            )
-        ]
-        # If no match is found, perform fuzzy matching
-        if match.empty:
-            best_match = process.extractOne(
-                translation[col_key], 
-                instances_df[instances_key], 
-                scorer=fuzz.token_set_ratio
-            )
-            print(f"best_match: {best_match}")
-            
-            # Check if the best match score is above a certain threshold, e.g., 90
-            if best_match and best_match[1] > 80:
-                best_match_index = best_match[2]
-                match = instances_df.iloc[[best_match_index]]
-            else:
-                # Log the unmatched case for review
-                print(f"example not similar enough")
-                # make match.empty
-                match = pd.DataFrame()
-
-    elif isinstance(row['example'], list) and len(row['example']) == 2:
-        match = find_matching_rows(instances_df, row['example'][0], row['example'][1])
+        example = example_query[col_key]
+    elif instances_column is not None:
+        instances_key = instances_column
+        col_key = 'query'
+        example = row['query']
     else:
-        match = instances_df[instances_df['query'].str.contains(row['query'], na=False, regex=False)]
+        instances_key = 'query'
+        col_key = 'query'
+        example = row['query']
 
-    if not match.empty:
-        matched_id = match.iloc[0]['id']
-        # Remove the matched row from instances_df
-        # instances_df.drop(match.index, inplace=True)
-        # print(f"Matched {row['query']} with {matched_id}")
-        return matched_id
+    match = find_best_match(example, instances_df, instances_key)
+
+    # If no match is found, perform fuzzy matching
+    if match.empty:
+        print(f"No match found for {example}")
     else:
-        # raise ValueError(f"No match found for {row['query']}")
-        print(f"No match found for {row['query']}")
-        return None
+        return match.iloc[0]['id']
+
+    # elif isinstance(row['example'], list) and len(row['example']) == 2:
+    #     match = find_matching_rows(instances_df, row['example'][0], row['example'][1])
+    # else:
+    #     match = instances_df[instances_df['query'].str.contains(row['query'], na=False, regex=False)]
+
+    # if not match.empty:
+    #     matched_id = match.iloc[0]['id']
+    #     # Remove the matched row from instances_df
+    #     # instances_df.drop(match.index, inplace=True)
+    #     # print(f"Matched {row['query']} with {matched_id}")
+    #     return matched_id
+    # else:
+    #     # raise ValueError(f"No match found for {row['query']}")
+    #     print(f"No match found for {row['query']}")
+    #     return None
 
 
-def add_ids_and_save(example_dfs, instances, filename):
+def add_ids_and_save(example_dfs, instances, filename, base_config):
+    instances_column = base_config['match_columns']['instances'] if 'match_columns' in base_config else 'query'
     # Add a new column 'id' to example_dfs by applying the find_matching_id function with a progress bar
+    print(f"instances: {instances.head()}")
     print(f"example_dfs: {example_dfs.head()['query']}")
-    print(f"instances: {instances.head()['query']}")
-    example_dfs['id'] = example_dfs.progress_apply(find_matching_id, axis=1, instances_df=instances)
+    print(f"instances: {instances.head()[instances_column]}")
+    example_dfs['id'] = example_dfs.progress_apply(find_matching_id, axis=1, 
+                                                   instances_df=instances,
+                                                   instances_column=instances_column)
 
     # Save the DataFrame to CSV
     example_dfs.to_csv(filename, index=False)
@@ -326,30 +463,15 @@ def add_ids_and_save(example_dfs, instances, filename):
 dataset_to_eval_task = {
     'mmlu': "MMLU/hendrycks*",
     'arithmetic': "ARITHMETIC/arithmetic*",
-    'translation': "TRANSLATION/wmt09"
+    'translation': "TRANSLATION/wmt09",
+    'triviaqa': "TRIVIA_QA/triviaqa",
 }
 
 
 def main(args):
-    # %%
-    n_gram_freqs_path = "./results/n-grams/exp_full/2/common/pl-en-2-grams.pkl"
-    n_gram_freqs = pickle.load(open(n_gram_freqs_path, "rb"))
-    n_gram_freqs = dict(sorted(n_gram_freqs.items(), key=lambda item: item[1]['value'], reverse=True))
-    # # export as text
-    # # with open("n_gram_freqs.txt", "w") as f:
-    # #     for k, v in n_gr
-    # # 3am_freqs.items():
-    # #         f.write(f"{k}: {v}\n")
-    # LANGUAGES = ['ru-en', 'fr-en', 'ro-en', 'de-en', 'pl-en', 'cs-en']
-    # LANGUAGES = ['ru-en', 'ro-en', 'de-en', 'pl-en', 'cs-en', 'fr-en', 'ja-en', 'zh-en']
 
-    # wmt09
-    LANGUAGES = ['cs-en', 'hu-en', 'de-en', 'it-en', 'fr-en', 'es-en']
-    ds = _load_dataset(args.dataset, tasks=LANGUAGES)    # if not args.debug else ["miscellaneous", "international_law"])
-
-    # %%z
     # lang params
-    N_GRAMS = args.ngrams
+    N_GRAMS = args.n_grams
     BASE_DIR = args.base_dir
     BASE_PATH = os.path.join(BASE_DIR, f"{N_GRAMS}")
     BASE_PATH_DF = os.path.join(BASE_PATH, args.method)
@@ -359,87 +481,64 @@ def main(args):
     TASK = dataset_to_eval_task[args.dataset]
     METHOD = args.method
 
-    # model params
-    base_results_config = {
-        "mmlu": {
-            'paths': {
-                "0-shot": {
-                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/pythia/experiment_4/inference/EleutherAI": [
-                        'pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
-                        'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
-                        'pythia-70m', 'pythia-31m', 'pythia-14m'
-                    ],
-                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/OLMO": [
-                        'OLMo-7b'
-                    ]
-                },
-                "5-shot": {
-                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/EleutherAI" : [
-                        'pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
-                        'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
-                        'pythia-70m', 'pythia-31m', 'pythia-14m'
-                    ],
-                }
-            },
-        },
-        "arithmetic": {
-            "paths" : {
-                "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/EleutherAI": [
-                    'pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
-                    'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
-                    'pythia-70m', 'pythia-31m', 'pythia-14m'
-                ]
-            },
-            "shot": "16-shot"
-        },
-        "translation": {
-            "paths": {
-                "0-shot": {
-                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_6_logits_max_4/inference/EleutherAI" : [
-                            'pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
-                            'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
-                            'pythia-70m', 'pythia-31m', 'pythia-14m'
-                    ],
-                },
-            },
-        }
-                
-    }
-
     result_shots = f"{args.shots}-shot"
-    base_config = base_results_config[args.dataset]
+    print(f"model type: {args.model_type}, dataset: {args.dataset}, shots: {result_shots}")
+    base_config = base_results_config[args.model_type][args.dataset]
     base_results_paths = base_config['paths'][result_shots]
+    if args.model_name is not None:
+        models = args.model_name
+    else:
+        models = list(base_results_paths.values())[0]
+    
+    print(f"models: {models}")
+
     TASKS_OMMIT = base_config['tasks_ommit'] if 'tasks_ommit' in base_config else []
     print(f"base_results_paths: {base_results_paths}")
 
-    models = ['pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
-              'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
-              'pythia-70m', 'pythia-31m', 'pythia-14m']
-            #   'OLMo-7b']
-
     # %%
+    if args.debug and args.dataset == 'mmlu':
+        tasks = "management"
+    else:
+        tasks = args.tasks
+        
+    ds = _load_dataset(args.dataset, tasks=tasks)
     TASKS = [remove_string(t) for t in list(ds.keys()) if t not in TASKS_OMMIT]
+    if tasks is not None:
+        TASKS = [t for t in TASKS if t in tasks]
+    print(f"ds: {ds}")
+    print(f"tasks: {tasks}")
     print(f"TASKS: {TASKS}")
+
     wa = WimbdAnalysis(BASE_PATH, TASKS, N_GRAMS, FILTER_CHARS)
 
     # %%
     if args.filename is not None:
+        print(f"Loading task dfs from {os.path.join(BASE_PATH_DF, args.filename)}")
+        # if args.filename.endswith('.csv'):
+        #     task_dfs = {}
+        #     task_dfs['en-es'] = pd.read_csv(os.path.join(BASE_PATH_DF, args.filename))
+        # elif args.filename.endswith('.pkl'):
         with open(os.path.join(BASE_PATH_DF, args.filename), "rb") as file:
             task_dfs = pickle.load(file)
     else:
-        task_dfs = wa.get_task_dfs(BASE_PATH_DF, TASKS)
+        task_dfs, task_df_pths = wa.get_task_dfs(BASE_PATH_DF, TASKS)
+    
+    task_dfs = {task: data for task, data in task_dfs.items() if task in TASKS}
+    print(task_dfs)
 
-    print(f"task dfs: {task_dfs}")
+    print(f"task dfs: {task_dfs.keys()}")
     # %%
     # get model performance results on tasks
     results_dict, instance_results_dict = process_model_results(base_results_paths, TASK, TASKS, result_shots)
     
+    print(f"results_dict: {results_dict.keys()}")
+
     # %%
     model_scores, dataset_scores = wa.prepare_scores(results_dict, task_dfs, models,)
                                                     # coverage_=task_cov_common,
                                                     # cov_mean=task_cov_mean)
-
-    single_model = ["pythia-12b"]
+    single_model = [models[0]]
+    print(f"single_model: {single_model}")
     single_model_score, single_model_dataset_score = wa.prepare_scores(results_dict, task_dfs, single_model)
                                                                     #    coverage_=task_cov_common)
 
@@ -460,6 +559,8 @@ def main(args):
                         'pythia-31m': 31e06,
                         'pythia-14m': 14e06,}
 
+    print(f"task_dfs: {task_dfs.keys()}")
+    print(f"models: {models}")
     model_scores, dataset_scores = wa.prepare_scores(results_dict, task_dfs, models)
                                                     # coverage_=task_cov_all,
                                                     # cov_mean=task_cov_mean)
@@ -484,7 +585,7 @@ def main(args):
     instances_df = process_instances(model_instance_results[list(model_instance_results.keys())[0]])
 
     # Assuming BASE_PATH is defined
-    filename = f'example_dfs_{METHOD}_exact.csv'
+    filename = f'example_dfs_{args.model_type}_{METHOD}_exact.csv'
     if args.debug:
         filename = f'example_dfs_{METHOD}_exact_debug.csv'
     example_dfs_filename = os.path.join(BASE_PATH, filename)
@@ -492,7 +593,7 @@ def main(args):
     print(f"example dfs all: {example_dfs}")
 
     # Process all tasks
-    example_dfs = add_ids_and_save(example_dfs, instances_df, example_dfs_filename)
+    example_dfs = add_ids_and_save(example_dfs, instances_df, example_dfs_filename, base_config)
     # count how many examples are not None or Nan
     examples_matched = example_dfs['id'].notna().sum()
     examples_umatched = example_dfs['id'].isna().sum()
@@ -502,7 +603,7 @@ def main(args):
     if args.debug:
         suffix = suffix + "_debug"
     example_dfs_models = process_and_save_results(example_dfs, model_instance_results, 
-                                                  BASE_PATH, suffix=f"{result_shots}_{METHOD}")
+                                                  BASE_PATH, suffix=f"{result_shots}_{METHOD}_{args.model_type}")
 
     print(f"Examples matched: {examples_matched}")
     print(f"Examples unmatched: {examples_umatched}")
@@ -518,15 +619,16 @@ def process_instances(model_instance_results):
 
 if __name__ == "__main__":
     args = parse_args()
-    # n_grams = [args.ngrams]
-    n_grams = list(range(15)) if args.ngrams is None else args.ngrams
+    # n_grams = [args.n_grams]
+    n_grams = list(range(15)) if args.n_grams is None else args.n_grams
     methods = ["common", "all"] if args.method is None else args.method
+    print(f"n_grams: {n_grams}, methods: {methods}")
     for method in methods:
         args.method = method
         for n_gram in n_grams:
             try:
-                args.ngrams = n_gram
-                print(f"method: {args.method}, ngrams: {args.ngrams}")
+                args.n_grams = n_gram
+                print(f"method: {args.method}, n_grams: {args.n_grams}")
                 main(args)
             except Exception as e:
                 print(f"An error occurred: {e}")
@@ -546,44 +648,109 @@ if __name__ == "__main__":
 """
 
 
-CUDA_VISIBLE_DEVICES="" python wimbd_process_results.py \
+CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
                           --base_dir "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue" \
                           --filename "lang_dfs_is_allTrue_filter_charsFalse_percentile0_detect_langTrue_filter_entitiesTrue_filter_stopwordsTrue_remove_englishTrue_remove_non_englishFalse.pkl" \
                           --dataset "translation" \
-                          --ngrams 1 2
+                          --n_grams 1 2
 
-CUDA_VISIBLE_DEVICES="" python wimbd_process_results.py \
+CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
                           --base_dir "./results/n-grams/exp_full" \
-                          --filename "lang_dfs_filter_charsFalse_percentile0_detect_langTrue_filter_entitiesTrue_filter_stopwordsTrue_align_langs0.pkl" \
+                          --filename "incidental-supervision/results/n-grams/exp_full/4/common/lang_dfs_filter_charsFalse_percentile0.995_detect_langFalse_filter_entitiesTrue_align_langs0.8.pkl" \
                           --dataset "translation" 
 
                           --base_dir "./results/n-grams/exp_full" \
                           --filename "lang_dfs_filter_charsFalse_lower_percentile0.005.pkl" \
-                          
+
                           --base_dir "./results/n-grams/wmt/pile/exp4/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue" \
                           --filename "lang_dfs_filter_charsFalse_lower_percentile0.005.pkl" \
 
+                          
+CUDA_VISIBLE_DEVICES=7 python wimbd_process.py \
+                          --base_dir ./results/n-grams/wmt09_gens/pile/exp_3/test-set/pythia-12b/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse \
+                          --dataset translation \
+                          --model_type pythia \
+                          --model_name pythia-12b \
+                          --method common \
+                          --tasks en-es \
+                          --filename lang_dfs_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesFalse_filter_stopwordsTrue_align_langs0.8_debugFalse.pkl \
+                          --n_grams 2
+                          
+                          2 grams
+                          410m
+                          ./results/n-grams/wmt09_gens/pile/exp_3/test-set/pythia-410m/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse
+                          lang_dfs_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesFalse_filter_stopwordsTrue_align_langs0.8_debugFalse.pkl
+                          12b
+                          ./results/n-grams/wmt09_gens/pile/exp_3/test-set/pythia-12b/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse
+                          lang_dfs_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesFalse_filter_stopwordsTrue_align_langs0.8_debugFalse.pkl
 
-CUDA_VISIBLE_DEVICES="" python wimbd_process_results.py \
-                          --base_dir "./results/n-grams/mmlu/pile/exp4_filter/test-set/exp_full_None" \
+
+                          4 grams
+                          410m
+                          ./results/n-grams/wmt09_gens/pile/410m/pythia-410m/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse
+                          12b
+                          
+                          ./results/n-grams/wmt09_gens/pile/exp_3/test-set/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse 
+                          ./results/n-grams/wmt09_gens/pile/410m/pythia-410m/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse
+
+CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
+                          --base_dir "./results/n-grams/mmlu/dolma/exp4_infini/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse/" \
                           --dataset "mmlu" \
                           --method "common" \
-                          --ngrams 5
+                          --n_grams 3
 
+--base_dir "./results/n-grams/mmlu/pile/exp4_nofilter/test-set/exp_full_None" \
 
-                          --base_dir "./results/n-grams/mmlu/pile/exp4_nofilter/test-set/exp_full_None" \
+MMLU OLMO
+CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
+                          --base_dir "./results/n-grams/mmlu/dolma/exp4_infini/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse/" \
+                          --base_dir "./results/n-grams/mmlu/dolma/exp4_infini/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse
+                          --filename "task_df_filter_charsTrue_percentile0.pkl" \
+                          --dataset mmlu \
+                          --model_type olmo \
+                          --method "common" \
+                          --debug \
+                          --n_grams 3
+
+MNLU OLMO (only top 5 tasks)
+CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
+                          --base_dir "./results/n-grams/mmlu/dolma/exp4_infini/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse_copy/" \
+                          --filename "task_df_filter_charsTrue_percentile0.pkl" \
+                          --dataset mmlu \
+                          --model_type olmo \
+                          --method "common" \
+                          --tasks marketing management \
+                                  high_school_world_history \
+                                  high_school_european_history \
+                                  miscellaneous \
+                          --n_grams 3
 
 ./results/n-grams/wmt/pile/exp4/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue/2/common/
 lang_dfs_filter_charsFalse_percentile0.999_detect_langFalse_filter_entitiesTrue.pkl
-CUDA_VISIBLE_DEVICES="" python wimbd_process_results.py \
+CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
                           --base_dir "./results/n-grams/wmt/pile/exp4/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue" \
                           --filename "lang_dfs_filter_charsFalse_percentile0.999_detect_langFalse_filter_entitiesTrue.pkl" \
                           --dataset "translation" \
                           --method "common" \
-                          --ngrams 2
+                          --n_grams 2
 
                           
+CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
+                --base_dir "./results/n-grams/triviaqa/pile/exp_3/validation-set/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse" \
+                --filename "task_df_filter_charsTrue_percentile0.pkl" \
+                --dataset "triviaqa" \
+                --method "common" \
+                --n_grams 5 \
 
+                
+sciq
+CUDA_VISIBLE_DEVICES=6 python wimbd_process.py \
+                --base_dir "./results/n-grams/triviaqa/pile/exp_3/validation-set/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse" \
+                --filename "task_df_filter_charsTrue_percentile0.pkl" \
+                --dataset "triviaqa" \
+                --method "common" \
+                --n_grams 3 5 \
+                --shots 4 
                           
 """
 
@@ -636,3 +803,7 @@ CUDA_VISIBLE_DEVICES="" python wimbd_process_results.py \
     # task_coverage = pd.DataFrame(task_coverage)
     # task_coverage = task_coverage.melt().rename(columns={"variable": "task", "value": "coverage"})
     # task_cov_mean = task_coverage.groupby('task')['coverage'].mean().to_dict()
+
+
+# ./results/n-grams/mmlu/dolma/exp4_infini/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse/3/common/task_df_filter_charsTrue_percentile0.pkl
+# ./results/n-grams/mmlu/dolma/exp4_infini/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse/3/common/task_df_filter_charsTrue_percentile0.pkl

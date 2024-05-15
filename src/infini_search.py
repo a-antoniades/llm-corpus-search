@@ -1,5 +1,7 @@
 import requests
 import time
+from functools import lru_cache
+
 
 API_ENDPOINT = "https://api.infini-gram.io/"
 DEFAULT_CORPUS = "v4_dolma-v1_6_llama"
@@ -21,6 +23,7 @@ def count_ngram(corpus, query):
         count = result["count"]
         return count
 
+@lru_cache(maxsize=None)
 def count_documents_containing_phrases(index, phrases, es=None, all_phrases=True):
     # if es is not None:
     #     print("Warning: The 'es' parameter is not used in this implementation.")
