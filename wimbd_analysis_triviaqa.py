@@ -15,13 +15,13 @@ from src.analysis import AnalyzeNgrams as an
 
 pd.set_option('display.max_columns', 10)
 
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base_dir", type=str, required=True, help="Base directory for the data")
     parser.add_argument("--ngrams", type=int, nargs="+", default=[1, 2, 3], help="List of n-gram sizes to process (default: [1, 2, 3])")
     args = parser.parse_args()
     return args
-
 
 
 def main(args):
@@ -82,5 +82,4 @@ def main(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    args.base_dir = 
     main(args)

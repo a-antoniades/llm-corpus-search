@@ -198,6 +198,31 @@ def total_tokens(dataset, text_field):
 
     return f"{total_count:.2e}"
 
+def extract_dict_entry_to_column(df, source_column, dict_key, new_column=None):
+    """
+    Extracts an entry from a dictionary in a specified column and creates a new column with that entry.
+
+    Args:
+    - df (pd.DataFrame): The DataFrame to process.
+    - source_column (str): The name of the column that contains the dictionaries.
+    - dict_key (str): The key in the dictionary to extract.
+    - new_column (str): The name of the new column to create with the extracted values.
+
+    Returns:
+    - pd.DataFrame: The DataFrame with the new column added.
+    """
+    # Check if the source column exists in the DataFrame
+    if source_column not in df.columns:
+        raise ValueError(f"The source column '{source_column}' does not exist in the DataFrame.")
+
+    if new_column is None:
+        new_column = dict_key
+
+    # Apply a lambda function to extract the dictionary entry and create the new column
+    df[new_column] = df[source_column].apply(lambda x: x.get(dict_key) if isinstance(x, dict) else None)
+
+    return df
+
 # def set_grad_accum
 
 

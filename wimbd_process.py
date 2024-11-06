@@ -7,6 +7,8 @@ from collections import defaultdict
 from tqdm import tqdm
 import json
 import pickle
+from ast import literal_eval
+
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -28,6 +30,8 @@ models = ['pythia-12b', 'pythia-6.9b', 'pythia-2.8b',
         'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
         'pythia-70m', 'pythia-31m', 'pythia-14m']
 
+# 'OLMo-7b', 'OLMo-7b-SFT', 'OLMo-7b-Instruct', 'OLMo-1B',
+
 # model params
 base_results_config = {
     "pythia": {
@@ -45,14 +49,14 @@ base_results_config = {
         "mmlu": {
             'paths': {
                 "0-shot": {
-                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/pythia/experiment_4/inference/EleutherAI": [
+                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/EleutherAI": [
                         'pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
                         'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
                         'pythia-70m', 'pythia-31m', 'pythia-14m'
                     ],
-                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/OLMO": [
-                        'OLMo-7b'
-                    ]
+                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/allenai": [
+                        'open-instruct-pythia-6.9b-tulu'
+                    ],
                 },
                 "5-shot": {
                     "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/EleutherAI" : [
@@ -93,6 +97,9 @@ base_results_config = {
                 "4-shot": {
                     "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/EleutherAI": models
                 },
+                "0-shot": {
+                    "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/EleutherAI": models
+                },
             },
             "match_columns":
             {
@@ -117,7 +124,7 @@ base_results_config = {
             'paths': {
                 "0-shot": {
                     "/share/edc/home/antonis/LLM-Incidental-Supervision/incidental-supervision/models/experiment_5/inference/allenai": [
-                        'OLMo-1B', 'OLMo-7B', 'OLMo-7B-SFT', 'OLMo-7B-Instruct'
+                        'OLMo-1B', 'OLMo-7B', 'OLMo-7B-SFT', 'OLMo-7B-Instruct', 'open-instruct-pythia-6.9b-tulu'
                     ]
                 },
             },
@@ -136,8 +143,9 @@ def parse_args():
     parser.add_argument("--n_grams", type=int, nargs='+', default=None)
     parser.add_argument('--shots', type=int, default=0, help='Number of shots')
     parser.add_argument('--base_dir', type=str, help='Base directory')
-    parser.add_argument('--filename', type=str, default=None, help='Filename of preprocessed task_dfs if it exists')
+    parser.add_argument('--filename', type=str, nargs='+', default=None, help='Filename to load')
     parser.add_argument('--method', type=str, nargs='+', default=None, help='Method to use')
+    parser.add_argument('--multi_task', action='store_true', help='Multi task')
     parser.add_argument('--debug', action='store_true', help='Debug mode')
     return parser.parse_args()
 
@@ -183,25 +191,36 @@ def process_model_results(base_results_paths, TASK, TASKS, SHOT):
     instance_results_dict = collections.defaultdict(dict)
 
     # Iterate over each model and dataset, loading the results.json file
-    for task in TASKS:
-        for base_results_path, models_ in base_results_paths.items():
+    for task in tqdm(TASKS, desc="Processing tasks"):
+        for base_results_path, models_ in tqdm(base_results_paths.items(), desc="Processing models"):
             result_paths = glob.glob(os.path.join(base_results_path, "**", "results.json"), recursive=True)
             instance_results_paths = glob.glob(os.path.join(base_results_path, "**", "doc_results.json"), recursive=True)
             for model in models_:
                 # get file that contains model, task and shot
                 # result_path = fetch_paths_with_criteria(result_paths, "results.json", model, TASK, SHOT, task)[0] # for translation this is what worked
                 # instance_results_path = fetch_paths_with_criteria(instance_results_paths, model, TASK, SHOT, task)[0]
-                result_path = fetch_paths_with_criteria(result_paths, "results.json", model, TASK, task, SHOT) # this is for trivia_qa and new tasks (i think)
-                instance_results_path = fetch_paths_with_criteria(instance_results_paths, model, TASK, task, SHOT)
+                print(f"result_paths: {base_results_path}, model:  {model}, TASK: {TASK}, task: {task}, SHOT: {SHOT}")
+                if '*' in TASK:
+                    result_path = fetch_paths_with_criteria(result_paths, "results.json", model, TASK, SHOT)
+                else:
+                    result_path = fetch_paths_with_criteria(result_paths, "results.json", model, TASK, task, SHOT) # this is for trivia_qa and new tasks (i think)
+                if '*' in TASK:
+                    instance_results_path = fetch_paths_with_criteria(instance_results_paths, model, TASK, SHOT)
+                else:
+                    instance_results_path = fetch_paths_with_criteria(instance_results_paths, model, TASK, task, SHOT)
                 results = json.load(open(result_path, 'r'))['results']
                 doc_results = json.load(open(instance_results_path, 'r'))
-                for task in results.keys():
-                    # remove hendrycksTest-
-                    task_str = remove_string(task)
-                    print(f"Processing {model} {task_str}")
-                    results_dict[task_str][model] = get_metric(results[task])
-                    if os.path.exists(instance_results_path):
-                        instance_results_dict[model][task_str] = doc_results[task]                     
+                print(f"results: {results.keys()}")
+                for task_ in results.keys():
+                    if task in task_:
+                        print(f"Processing {model} {task}")
+                        # remove hendrycksTest-
+                        task_str = remove_string(task)
+                        print(f"Processing {model} {task_str}")
+                        results_dict[task_str][model] = get_metric(results[task_])
+                        if os.path.exists(instance_results_path):
+                            instance_results_dict[model][task_str] = doc_results[task_]                     
+                            print(f"found!")
     return results_dict, instance_results_dict
 
 
@@ -308,6 +327,8 @@ def merge_and_process_dfs(task_dfs):
     # Extract 'query' from the 'example' column, handling both 'question' and 'context'
     def extract_query(example):
         if 'question' in example:
+            if isinstance(example, str):
+                example = literal_eval(example)
             return example['question']
         elif 'context' in example:
             return example['context']
@@ -404,8 +425,10 @@ def find_matching_id(row, instances_df, instances_column=None):
             
     # Check if the 'query' is a list and has two elements to match against 'src' and 'ref'
     if 'translation' in row['example']:
-        example_query = row['example']['translation']
-        langs = list(example_query.keys())
+        if isinstance(row['example'], str):
+            example_query = literal_eval(row['example'])['translation']
+        else:
+            example_query = row['example']['translation']
         n_col_key, col_key = find_non_en_key(example_query)
         instances_key = 'src' if n_col_key == 0 else 'ref'
         example = example_query[col_key]
@@ -473,6 +496,7 @@ def main(args):
     # lang params
     N_GRAMS = args.n_grams
     BASE_DIR = args.base_dir
+    print(f"BASE_DIR: {BASE_DIR}")
     BASE_PATH = os.path.join(BASE_DIR, f"{N_GRAMS}")
     BASE_PATH_DF = os.path.join(BASE_PATH, args.method)
     FILTER_CHARS = False
@@ -513,6 +537,7 @@ def main(args):
 
     # %%
     if args.filename is not None:
+        print(f"Loading task dfs from {BASE_PATH_DF}, {args.filename}")
         print(f"Loading task dfs from {os.path.join(BASE_PATH_DF, args.filename)}")
         # if args.filename.endswith('.csv'):
         #     task_dfs = {}
@@ -620,30 +645,60 @@ def process_instances(model_instance_results):
 if __name__ == "__main__":
     args = parse_args()
     # n_grams = [args.n_grams]
-    n_grams = list(range(15)) if args.n_grams is None else args.n_grams
-    methods = ["common", "all"] if args.method is None else args.method
-    print(f"n_grams: {n_grams}, methods: {methods}")
-    for method in methods:
-        args.method = method
-        for n_gram in n_grams:
-            try:
+    if args.multi_task:
+        n_grams = list(range(15)) if args.n_grams is None else args.n_grams
+        methods = ["common", "all"] if args.method is None else args.method
+        
+        base_dirs = ["./results/n-grams/wmt09_gens/pile/exp4__"]
+        models = ['pythia-12b', 'pythia-2.8b', 'pythia-410m']
+        # models = ['pythia-12b']
+        sub_dirs = ["n_samples_100_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue",
+                    "n_samples_100_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue"]
+        filenames = ["lang_dfs_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesFalse_filter_stopwordsFalse_align_langs0.8_debugFalse.pkl"]
+
+        print(f"n_grams: {n_grams}, methods: {methods}")
+        for base_dir in base_dirs:
+            for model in models:
+                for sub_dir in sub_dirs:
+                    args.base_dir = os.path.join(base_dir, model, sub_dir)
+                    args.model_name = [model]
+                    
+                    for filename in filenames:
+                        args.filename = filename
+                    
+                        for method in methods:
+                            args.method = method
+                            
+                            for n_gram in n_grams:
+                                try:
+                                    args.n_grams = n_gram
+                                    print(f"method: {args.method}, n_grams: {args.n_grams}, model: {args.model_name}, filename: {args.filename}")
+                                    main(args)
+                                except Exception as e:
+                                    print(f"An error occurred: {e}")
+                                    traceback.print_exc()  # This will print the stack trace
+                                    continue
+    else:
+        if args.method is None:
+            methods = ["all", "common"]
+        else:
+            methods = args.method
+        
+        n_grams = args.n_grams if args.n_grams is not None else list(range(15))
+        filenames = args.filename
+        
+        for method in methods:
+            for n_gram in n_grams:
                 args.n_grams = n_gram
-                print(f"method: {args.method}, n_grams: {args.n_grams}")
+                args.method = method
+            if isinstance(filenames, list):
+                for filename in filenames:
+                    args.filename = filename
+                    print(f"method: {method}, n_grams: {args.n_grams}, base_dir: {type(args.base_dir)}")
+                    main(args)
+            else:
+                print(f"method: {method}, n_grams: {args.n_grams}, base_dir: {type(args.base_dir)}")
                 main(args)
-            except Exception as e:
-                print(f"An error occurred: {e}")
-                traceback.print_exc()  # This will print the stack trace
-                continue
-
-    # if args.method is None:
-    #     methods = ["all", "common"]
-    #     for method in methods:
-    #         args.method = method
-    #         main(args)
-    # else:
-    #     main(args)
-
-
 
 """
 
@@ -665,7 +720,7 @@ CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
                           --base_dir "./results/n-grams/wmt/pile/exp4/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue" \
                           --filename "lang_dfs_filter_charsFalse_lower_percentile0.005.pkl" \
 
-                          
+- wmt09_gens             
 CUDA_VISIBLE_DEVICES=7 python wimbd_process.py \
                           --base_dir ./results/n-grams/wmt09_gens/pile/exp_3/test-set/pythia-12b/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse \
                           --dataset translation \
@@ -693,15 +748,55 @@ CUDA_VISIBLE_DEVICES=7 python wimbd_process.py \
                           ./results/n-grams/wmt09_gens/pile/exp_3/test-set/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse 
                           ./results/n-grams/wmt09_gens/pile/410m/pythia-410m/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse
 
+                          
+100samples multitask
+CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
+                          --dataset translation \
+                          --model_type pythia \
+                          --method common \
+                          --tasks en-es \
+                          --n_grams 2 1 3 \
+                          --multi_task
+
+                          
+                          
+
+--base_dir "./results/n-grams/mmlu/pile/exp4_nofilter/test-set/exp_full_None" \
+./results/n-grams/mmlu/pile/exp4_filter/test-set/exp_full_None
+
+- MMLU 
+
+-- Pythia / Pile
+
+CUDA_VISIBLE_DEVICES=2 python wimbd_process.py \
+                          --base_dir "./results/n-grams/mmlu/exp3/test-set/exp_full_None" \
+                          --model_type pythia \
+                          --dataset "mmlu" \
+                          --method "common" \
+                          --model_type pythia \
+                          --n_grams 3
+
+MMLU multi-task
+
+CUDA_VISIBLE_DEVICES=2 python wimbd_process.py \
+                          --base_dir "./results/n-grams/mmlu/pile/exp4_nofilter/test-set/exp_full_None" \
+                          --dataset "mmlu" \
+                          --method "common" \
+                          --model_type pythia \
+                          --n_grams 5 
+
+                          --tasks marketing management \
+                                  high_school_world_history \
+                                  high_school_european_history \
+                                  miscellaneous \
+-- OLMO / DOLMA
+
 CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
                           --base_dir "./results/n-grams/mmlu/dolma/exp4_infini/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse/" \
                           --dataset "mmlu" \
                           --method "common" \
                           --n_grams 3
 
---base_dir "./results/n-grams/mmlu/pile/exp4_nofilter/test-set/exp_full_None" \
-
-MMLU OLMO
 CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
                           --base_dir "./results/n-grams/mmlu/dolma/exp4_infini/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse/" \
                           --base_dir "./results/n-grams/mmlu/dolma/exp4_infini/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse
@@ -734,13 +829,24 @@ CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
                           --method "common" \
                           --n_grams 2
 
-                          
+- TRIVIA QA -            
 CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
-                --base_dir "./results/n-grams/triviaqa/pile/exp_3/validation-set/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse" \
+                --base_dir ./results/n-grams/triviaqa/pile/exp_3/validation-set/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse \
                 --filename "task_df_filter_charsTrue_percentile0.pkl" \
                 --dataset "triviaqa" \
                 --method "common" \
                 --n_grams 5 \
+                --model_type pythia \
+                --shots 0
+
+CUDA_VISIBLE_DEVICES="" python wimbd_process.py \
+                --base_dir ./results/n-grams/triviaqa/pile/exp_3/validation-set/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse \
+                --filename "task_df_filter_charsTrue_percentile0.pkl" \
+                --dataset "triviaqa" \
+                --method "common" \
+                --n_grams 3 \
+                --model_type pythia \
+                --shots 0
 
                 
 sciq

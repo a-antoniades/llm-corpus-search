@@ -45,8 +45,11 @@ import langid
 from tqdm import tqdm
 tqdm.pandas()
 
+
+from transformers import AutoTokenizer, AutoModel
+
 from src.utils import (remove_string, normalize_string, softmax,
-                       remove_nested_lists)
+                       remove_nested_lists, extract_dict_entry_to_column)
 
 CACHE_DIR = "/share/edc/home/antonis/datasets/huggingface"
 WEIGHTS_DIR = "/share/edc/home/antonis/weights/huggingface"
@@ -59,6 +62,44 @@ MODEL_NAMES = [
     "pythia-410m", "pythia-70m", "pythia-14m", "pythia-2.8b",
     "pythia-6.9b", "pythia-160m"
 ]
+
+PYTHIA_MODEL_NAMES = [
+    'pythia-14m', 'pythia-31m', 'pythia-70m',
+    'pythia-160m', 'pythia-410m', 'pythia-1.4b',
+    'pythia-2.8b', 'pythia-6.9b', 'pythia-12b'
+]
+
+# Define country-specific colors
+country_colors = {
+    'fr-en': '#0055A4',   # France - Blue
+    'es-en': '#FF9900',   # Spain - Orange
+    'it-en': '#008C45',   # Italy - Green
+    'de-en': '#FFCC00',   # Germany - Yellow
+    'cs-en': '#D7141A',   # Czech Republic - Red
+    'hu-en': '#8B4513'    # Hungary - SaddleBrown
+}
+
+MARKERS = ['o', 's', 'D', 'v', '^', 'p', '*', 'h', 'x', '+']
+
+LANG_MARKERS = {
+    'cs': 'o',   # Czech Republic - Red
+    'fr': 's',   # France - Blue
+    'es': 'D',   # Spain - Orange
+    'de': 'v',   # Germany - Yellow
+    'hu': '^',   # Hungary - SaddleBrown
+    'it': 'p'    # Italy - Green
+}
+
+# Define the Colors class
+class Colors:
+    PYTHIA_MODEL_NAMES = [
+        'pythia-14m', 'pythia-31m', 'pythia-70m',
+        'pythia-160m', 'pythia-410m', 'pythia-1.4b',
+        'pythia-2.8b', 'pythia-6.9b', 'pythia-12b'
+    ]
+
+    model_colormap = plt.cm.get_cmap('coolwarm', len(PYTHIA_MODEL_NAMES))
+    # model_color_mapping = {model: model_colormap(1 - i / len(PYTHIA_MODEL_NAMES)) for i, model in enumerate(reversed(PYTHIA_MODEL_NAMES))}
 
 dataset_mapping = {
     "wmt09": [("cs", "en"), ("de", "en"), ("fr", "en"), ("es", "en"), ("it", "en"), ("hu", "en"),
@@ -217,7 +258,8 @@ def filter_strings(text, str_remove=None, replacements=None):
     text = text.lstrip()  # Remove leading spaces
     return text
 
-def clean_text(string, dataset, filter, replace):
+def clean_text(string, dataset, filter, replace,
+               answer_idx=None):
     string_configs = {
         "arithmetic": {
             "filter_words": ['Question:', 'Answer:', 'What is', '?', '\n'],
@@ -226,6 +268,9 @@ def clean_text(string, dataset, filter, replace):
             }
         }
     }
+    if answer_idx is not None:
+        string = string[answer_idx]
+
     if not isinstance(string, str):
         if isinstance(string, list) or isinstance(string, tuple):
             string = ' '.join(string)
@@ -293,7 +338,40 @@ def load_lang_ds(lang_pairs=None, **kwargs):
         lang_ds[lang_pair] = ds['translation']
     return lang_ds
 
-def load_results(base_results_path, models, task, shot, subtasks, replace_str='wmt09-'):
+# def load_results(base_results_path, models, task, shot, subtasks, replace_str='wmt09-'):
+#     """
+#     Load results from a structured directory into a dictionary.
+
+#     :param base_results_path: The base directory where results are stored.
+#     :param models: A list of model names.
+#     :param task: The task name.
+#     :param shot: The shot type (e.g., 'zero-shot').
+#     :param tasks: A list of tasks to include in the results.
+#     :return: A dictionary with the loaded results.
+#     """
+#     results_dict = defaultdict(dict)
+
+#     # Iterate over each model and dataset, loading the results.json file
+#     for model in models:
+#         results_path = os.path.join(base_results_path, model, task)
+#         for subtask in subtasks:
+#             print(f"subtask: {subtask}")
+#             results_file = glob.glob(os.path.join(results_path, subtask, shot, '**/results.json'), recursive=True)
+#             # print(f"results_file: {results_file}")
+#             assert len(results_file) == 1, f"Found {len(results_file)} results files for model {model}, \
+#                                              task {task}, shot {shot}, subtask {subtask} \
+#                                              {results_file}"
+#             results = json.load(open(results_file[0]))['results']
+#             if replace_str:
+#                 subtask_ = subtask.replace(replace_str, '')
+#             else:
+#                 subtask_ = subtask
+#             results_dict[model][subtask_] = results[subtask]
+    
+#     return results_dict
+
+
+def load_results(base_results_path, models, task, shot, subtasks, replace_str='wmt09-', calc_reverse=False):
     """
     Load results from a structured directory into a dictionary.
 
@@ -301,28 +379,51 @@ def load_results(base_results_path, models, task, shot, subtasks, replace_str='w
     :param models: A list of model names.
     :param task: The task name.
     :param shot: The shot type (e.g., 'zero-shot').
-    :param tasks: A list of tasks to include in the results.
+    :param subtasks: A list of tasks to include in the results.
+    :param replace_str: A string to replace in the subtask name.
+    :param calc_reverse: A boolean to determine if reverse tasks should be included.
     :return: A dictionary with the loaded results.
     """
     results_dict = defaultdict(dict)
+
+    # Helper function to load results from a specified path
+    def load_results_from_path(path):
+        results_file = glob.glob(os.path.join(path, '**/results.json'), recursive=True)
+        assert len(results_file) == 1, f"Found {len(results_file)} results files at {path} {results_file}"
+        return json.load(open(results_file[0]))['results']
+
+    # Helper function to generate reverse task name
+    def generate_reverse_subtask(subtask):
+        parts = subtask.split('-')
+        if len(parts) == 3 and parts[0] == replace_str.rstrip('-'):
+            return f"{parts[0]}-{parts[2]}-{parts[1]}"
+        return subtask
 
     # Iterate over each model and dataset, loading the results.json file
     for model in models:
         results_path = os.path.join(base_results_path, model, task)
         for subtask in subtasks:
-            results_file = glob.glob(os.path.join(results_path, subtask, shot, '**/results.json'), recursive=True)
-            # print(f"results_file: {results_file}")
-            assert len(results_file) == 1, f"Found {len(results_file)} results files for model {model}, \
-                                             task {task}, shot {shot}, subtask {subtask} \
-                                             {results_file}"
-            results = json.load(open(results_file[0]))['results']
+            subtask_results_path = os.path.join(results_path, subtask, shot)
+            original_results = load_results_from_path(subtask_results_path)[subtask]
+
             if replace_str:
                 subtask_ = subtask.replace(replace_str, '')
             else:
                 subtask_ = subtask
-            results_dict[model][subtask_] = results[subtask]
-    
+
+            if calc_reverse:
+                reverse_subtask = generate_reverse_subtask(subtask)
+                reverse_results_path = os.path.join(results_path, reverse_subtask, shot)
+                reverse_results = load_results_from_path(reverse_results_path)[reverse_subtask]
+
+                # Calculate the average score between the original and reverse results
+                avg_results = {k: (v + reverse_results[k]) / 2 for k, v in original_results.items()}
+                results_dict[model][subtask_] = avg_results
+            else:
+                results_dict[model][subtask_] = original_results
+
     return results_dict
+
 
 def drop_rows_without_words(df, language):
     def check_words(row):
@@ -377,7 +478,7 @@ def drop_rows_with_stopwords(df, language):
     # convert language to full language name
     lang_col_name = language
     language = language_mapping[language]
-    tqdm.pandas(desc=f"Filtering rows for language: {language}")
+    tqdm.pandas(desc=f"Filtering stopwords for language: {language}")
     mask = df.progress_apply(check_stopwords, axis=1)
     return df[mask]
 
@@ -385,7 +486,8 @@ class BasePaths:
     base_ngram_paths = {
         "mmlu": {
             # "base_path": "./results/n-grams/mmlu/pile/exp4_nofilter/test-set/exp_full_None",
-            "pile": {"base_path": "./results/n-grams/mmlu/pile/exp4_filter/test-set/exp_full_None"},
+            # "pile": {"base_path": "./results/n-grams/mmlu/pile/exp4_filter/test-set/exp_full_None"},
+            "pile": {"base_path": "./results/n-grams/mmlu/exp3/test-set/exp_full_None"},
             "dolma": {"base_path": "./results/n-grams/mmlu/dolma/exp4_infini/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse"},
             "tasks": [
                         'abstract_algebra',
@@ -453,7 +555,10 @@ class BasePaths:
                       'wmt09-en-cs', 'wmt09-en-de', 'wmt09-en-fr', 'wmt09-en-es', 'wmt09-en-it', 'wmt09-en-hu']
         },
         "triviaqa": {
-            "base_path": "./results/n-grams/trivia_qa/pile/exp_3/test-set/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse"
+            "base_path": {
+                5 : "./results/n-grams/triviaqa/pile/exp_3/validation-set/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse",
+                3 : "./results/n-grams/triviaqa/pile/exp_3/validation-set/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaFalse"
+            },
         },
         "sciq": {
             "base_path": " ", 
@@ -492,7 +597,8 @@ class DataConfigs:
         'mmlu': {
             'text_1': 'question',
             'text_2': 'choices',
-            'split': 'test'
+            'split': 'test',
+            'answer': 'answer',
         },
         'bigbench': {
             'text_1': 'inputs',
@@ -564,7 +670,7 @@ class DataConfigs:
             ],
             'professional': [
                     'professional_psychology', # use no filtering
-                    'professional_law' # use no filtering,
+                    'professional_law', # use no filtering,
                     'nutrition',
                     'public_relations'
 
@@ -585,9 +691,131 @@ class DataConfigs:
             ]
         }
 
+import torch
+
+def align_e5_pairs_df(df, col_1, col_2):
+    """
+    Create a new column called alignment_score with the e5 scores
+    """
+    from transformers import AutoTokenizer, AutoModel
+
+    device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
+    tokenizer = AutoTokenizer.from_pretrained('intfloat/e5-large-v2')
+    model = AutoModel.from_pretrained('intfloat/e5-large-v2').to(device)
+    model.eval()
+
+    print(f"Using device: {device}")
+    
+    def get_max_batch_size(text_1_batch, text_2_batch):
+        def can_allocate_memory(batch_size):
+            try:
+                input_text = ['query: ' + query for query in text_1_batch[:batch_size]] + \
+                            ['passage: ' + passage for passage in text_2_batch[:batch_size]]
+                batch = tokenizer(input_text, max_length=512, padding=True,
+                                truncation=True, return_tensors='pt').to(device)
+                _ = batch.input_ids.size()  # Trigger CUDA memory allocation
+                return True
+            except RuntimeError:
+                return False
+
+        low, high = 1, len(text_1_batch)
+        max_batch_size = 1024
+
+        while low <= high:
+            mid = (low + high) // 2
+            if can_allocate_memory(mid):
+                max_batch_size = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+                torch.cuda.empty_cache()  # Clear cache after a failed allocation
+
+        return max_batch_size
+
+    alignment_scores = []
+
+    for i in tqdm(range(0, len(df)), desc="Aligning pairs"):
+        print(f"Processing row {i}")
+        text_1_batch = df[col_1].iloc[i:].tolist()
+        text_2_batch = df[col_2].iloc[i:].tolist()
+        
+        # max_batch_size = get_max_batch_size(text_1_batch, text_2_batch)
+        max_batch_size = 32
+        
+        for j in tqdm(range(0, len(text_1_batch), max_batch_size), desc="Processing batches"):
+            batch_text_1 = text_1_batch[j:j+max_batch_size]
+            batch_text_2 = text_2_batch[j:j+max_batch_size]
+            
+            scores = calculate_qa_score(batch_text_1, batch_text_2, model=model, tokenizer=tokenizer)
+            alignment_scores.extend(scores)
+            
+        if len(alignment_scores) >= len(df):
+            break
+
+    df['alignment_score'] = alignment_scores[:len(df)]
+    return df
+
+def calculate_qa_score(text_1, text_2, model, tokenizer, threshold=0.7):
+    """
+    Align pairs using e5 embeddings
+    text_1, text_2: lists of texts to be aligned
+    """
+    import torch
+    import torch.nn.functional as F
+
+    device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
+
+    if not isinstance(text_1, list):
+        text_1 = [text_1]
+    if not isinstance(text_2, list):
+        text_2 = [text_2]
+
+    def average_pool(last_hidden_states, attention_mask):
+        last_hidden = last_hidden_states.masked_fill(~attention_mask[..., None].bool(), 0.0)
+        return last_hidden.sum(dim=1) / attention_mask.sum(dim=1)[..., None]
+
+    with torch.no_grad():
+        querries = ['query: ' + query for query in text_1]
+        passages = ['passage: ' + passage for passage in text_2]
+        input_text = querries + passages
+        batch = tokenizer(input_text, max_length=512, padding=True,
+                          truncation=True, return_tensors='pt').to(device)
+        outputs = model(**batch)
+        embeddings = average_pool(outputs.last_hidden_state, batch['attention_mask'])
+        embeddings = F.normalize(embeddings, p=2, dim=1)
+        num_pairs = min(len(querries), len(passages))
+        scores = (embeddings[:num_pairs].cpu() @ embeddings[num_pairs:].cpu().T)
+        corresponding_scores = scores.diag().detach().numpy() * 100  # Extract the diagonal and scale by 100
+
+    return corresponding_scores
+
+def align_ngram_combinations(ngram_combinations, model, tokenizer, threshold=None):
+    """
+    Calculate the QA score for all pairs of n-grams.
+
+    ngram_combinations: list of tuples, where each tuple contains two n-grams
+    model: the pre-trained model to be used for embeddings
+    tokenizer: the tokenizer corresponding to the pre-trained model
+    threshold: optional score threshold to filter out low-score pairs
+
+    Returns:
+        A list of tuples with the n-grams and their QA score, optionally filtered by the threshold.
+    """
+    
+    aligned_pairs = []
+    for pair in ngram_combinations:
+        ngram_1, ngram_2 = pair
+        score = calculate_qa_score(ngram_1, ngram_2, model, tokenizer)[0]
+        if threshold is None or score >= threshold:
+            aligned_pairs.append((ngram_1, ngram_2))
+
+    print(f"kept {len(aligned_pairs)} out of {len(ngram_combinations)} pairs")
+    
+    return aligned_pairs
+
 
 class WimbdTasks:
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.translation_dataset_mapping = {
             "wmt09": [("cs", "en"), ("de", "en"), 
                       ("fr", "en"), ("es", "en"), 
@@ -619,6 +847,14 @@ class WimbdTasks:
                                    'cs-en', 
                                    'de-en']
 
+
+        if kwargs.get('align_pairs', True):
+            lang_pair = kwargs.get('language_pair', ('en', 'fr'))
+            if lang_pair[0] == lang_pair[1]:
+                self.tokenizer = AutoTokenizer.from_pretrained('intfloat/e5-large-v2')
+                device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
+                self.model = AutoModel.from_pretrained('intfloat/e5-large-v2').to(device)
+                self.model.eval()
         self.Laser = Laser()
 
     def load_ds_translation(self, language_pair):
@@ -706,7 +942,7 @@ class WimbdTasks:
 
     def get_combinations(self, text_1, text_2, language_pair, n_gram=2,
                          no_split_text2=False, filter_stopwords=False, 
-                         only_alpha=False, filter_punc=True):
+                         only_alpha=False, filter_punc=True, align_pairs=False):
         
         full_lang_1_name = self.get_language_name(language_pair[0])
         full_lang_2_name = self.get_language_name(language_pair[1])
@@ -736,15 +972,23 @@ class WimbdTasks:
         
         # align lang pairs 
         if language_pair[0] != language_pair[1]:
-            if n_gram <= 2:
-                threshold = 0.6
-            else:
-                threshold = 0.9
-            text_combinations = self.align_lang_pairs(text_combinations, 
-                                                      language_pair[0], 
-                                                      language_pair[1],
-                                                      threshold=threshold)
-        
+            if align_pairs:
+                if n_gram <= 2:
+                    threshold = 0.6
+                else:
+                    threshold = 0.9
+                text_combinations = self.align_lang_pairs(text_combinations, 
+                                                        language_pair[0], 
+                                                        language_pair[1],
+                                                        threshold=threshold)
+        else:
+            if align_pairs:
+                print(f"aligning pairs!!")
+                text_combinations = align_ngram_combinations(
+                    text_combinations, self.model, self.tokenizer, threshold=0.85
+                )
+
+                
         text_combinations = tuple(text_combinations)
         return text_combinations
 
@@ -826,7 +1070,6 @@ class WimbdAnalysis:
         non_zero = df[df['value'] > 0]
         return len(non_zero) / (len(zero) + len(non_zero))
 
-
     def sum_values(self, data):
         return sum(item['value'] for item in data.values())
    
@@ -906,7 +1149,8 @@ class WimbdAnalysis:
         
         return filtered_df
     
-    def align_lang_pairs_df(self, df, lang_1, lang_2):
+    def align_lang_pairs_df(self, df, lang_1, lang_2, 
+                            col_1=None, col_2=None):
         """
         Add a new column to the DataFrame with the similarity score between two languages.
 
@@ -918,15 +1162,17 @@ class WimbdAnalysis:
         Returns:
         - pd.DataFrame: The DataFrame with the new similarity score column.
         """
+        col_1_name = lang_1 if col_1 is None else col_1
+        col_2_name = lang_2 if col_2 is None else col_2
 
         def calculate_laser_similarity(row):
-            return self.wt.laser_similarity(row[lang_1], lang_1, row[lang_2], lang_2)
+            return self.wt.laser_similarity(row[col_1_name], lang_1, row[col_2_name], lang_2)
 
         # Apply the similarity function to each row to create a new column with the scores
+        print(f"Calculating multilingual alignment scores for {lang_1} and {lang_2}")
         df['alignment_score'] = df.progress_apply(calculate_laser_similarity, axis=1)
 
         return df
-
 
     def prepare_ngram_df(self, n_gram_freqs_path, is_all=False, 
                         filter_chars=False, detect_lang=False,
@@ -962,7 +1208,7 @@ class WimbdAnalysis:
             # and that they are separated by spaces (e.g., 'word1 word2')
             df = df[df.index.get_level_values(0).map(lambda x: len(x.split()) == n_gram)]
         
-        df = df[df['value'] > 0]
+        # df = df[df['value'] > 0]
 
         if is_all:
             df = df.reset_index().rename(columns={"index": non_english_lang})
@@ -1029,7 +1275,7 @@ class WimbdAnalysis:
     
     def prepare_ngram_df_(self, n_gram_freqs_path, is_all=False, 
                           filter_chars=False, detect_lang=False, 
-                          percentile=0):
+                          percentile=0, **kwargs):
      
         df = pd.read_pickle(n_gram_freqs_path)
         if isinstance(df, list):
@@ -1038,11 +1284,17 @@ class WimbdAnalysis:
         df = pd.DataFrame(df).T.sort_values("value", ascending=False)
         df['coverage'] = self.calc_coverage(df)
         # df = df[df['value'] > 0]
-        df_0 = df[df['value'] > 0]
+        # df_0 = df[df['value'] > 0]
         df = df.reset_index().rename(columns={"level_0": "Q", "level_1": "A"})
+        print(f"df cols: {df.columns}")
+        df = extract_dict_entry_to_column(df, 'example', 'question', 'question')
 
         if percentile > 0:
             df = filter_percentile(df, percentile)
+        
+        # if kwargs.get("align_pairs"):
+        print(f"aligning pairs")
+        df = align_e5_pairs_df(df, 'Q', 'question')
     
         return df
 
@@ -1057,9 +1309,14 @@ class WimbdAnalysis:
         return files
 
     def get_lang_dfs(self, base_path, datasets, **kwargs):
+        kwarg_string = '_'.join(f"{key}{value}" for key, value in kwargs.items())
+        filename = f"lang_dfs_{kwarg_string}.pkl"
+        save_pth = os.path.join(base_path, filename)
+        task_name = os.path.join(base_path, f"{file}.csv")
         
         def get_file_name(lang_pair):
             file = [file for file in files if lang_pair[0] in file and lang_pair[1] in file]
+            print(f"file: {file}, {files}")
             assert len(file) == 1, f"file: {file} not found, or found multiple times"
             return file[0]
         
@@ -1071,15 +1328,21 @@ class WimbdAnalysis:
         lang_dfs = {}
         for lang_pair in lang_pairs:
             file = get_file_name(lang_pair)
-            n_gram_freqs, df_clean = self.prepare_ngram_df(os.path.join(base_path, file), **kwargs)
+            # check if file exists
+            if os.path.exists(task_name):
+                # load file
+                df_clean = pd.read_csv(task_name)
+                # check if 'alignment_score' column exists
+                if 'alignment_score' in df_clean.columns:
+                    print(f"---- file {file} exists, skipping ----")
+                else:
+                    print(f"---- file {file} exists, but alignment_score column is missing ----")
+                    n_gram_freqs, df_clean = self.prepare_ngram_df(os.path.join(base_path, file), **kwargs)
             languages = f"{lang_pair[0]}-{lang_pair[1]}"
             lang_dfs[languages] = df_clean
-            df_clean.to_csv(os.path.join(base_path, f"{file}.csv"), index=False)
+            df_clean.to_csv(task_name, index=False)
 
         # save lang_df
-        kwarg_string = '_'.join(f"{key}{value}" for key, value in kwargs.items())
-        filename = f"lang_dfs_{kwarg_string}.pkl"
-        save_pth = os.path.join(base_path, filename)
         with open(save_pth, "wb") as f:
             pickle.dump(lang_dfs, f)
         
@@ -1087,6 +1350,11 @@ class WimbdAnalysis:
         return lang_dfs, save_pth
     
     def get_task_dfs(self, base_path, datasets, **kwargs):
+        # save task_dfs
+        kwarg_string = '_'.join(f"{key}{value}" for key, value in kwargs.items())
+        filename = f"task_df_{kwarg_string}.pkl"
+        save_pth = os.path.join(base_path, filename)
+        
         if not isinstance(datasets, list):
             datasets = [datasets]
 
@@ -1096,17 +1364,30 @@ class WimbdAnalysis:
 
         for file in files:
             print(f"processing {file}")
-            df_clean = self.prepare_ngram_df_(os.path.join(base_path, file), **kwargs)
-            print(f"df_clean {df_clean}")
+            file_path = os.path.join(base_path, f"{file}.csv")
+            # check if file exists
+            if os.path.exists(file_path):
+                # Load file
+                df_clean = pd.read_csv(file_path)
+
+                # Check if 'alignment_score' column exists
+                if 'alignment_score' in df_clean.columns:
+                    print(f"---- File {file} exists, skipping ----")
+                else:
+                    print(f"---- File {file} exists, but alignment_score column is missing ----")
+                    df_clean = self.prepare_ngram_df_(os.path.join(base_path, file), **kwargs)
+                    df_clean.to_csv(file_path, index=False)
+            else:
+                print(f"---- File {file} does not exist ----")
+                df_clean = self.prepare_ngram_df_(os.path.join(base_path, file), **kwargs)
+                df_clean.to_csv(file_path, index=False)
+            print(f"df_clean {df_clean.columns}")
+            print(os.path.join(base_path, f'{file}.csv'))
             task = remove_string(file.split("/")[-1].split(".")[0])
             task_dfs[task] = df_clean
             # export
             df_clean.to_csv(os.path.join(base_path, f"{file}.csv"), index=False)
         
-        # save task_dfs
-        kwarg_string = '_'.join(f"{key}{value}" for key, value in kwargs.items())
-        filename = f"task_df_{kwarg_string}.pkl"
-        save_pth = os.path.join(base_path, filename)
         with open(save_pth, "wb") as f:
             pickle.dump(task_dfs, f)
         
@@ -1231,8 +1512,12 @@ class WimbdAnalysis:
                     x_key='n_samples', name=None,
                     log_axis=False,
                     fit_polynomial=None):
-        plt.figure(figsize=(10, 8))
+        plt.figure(figsize=(6, 4.5))
         texts = []
+        linestyle = "-"
+        fontsize = 14
+
+        plt.rcParams.update({'font.size': fontsize})
 
         for model in model_scores:
             # Sort the data by x-values
@@ -1243,32 +1528,139 @@ class WimbdAnalysis:
             if fit_polynomial:
                 z = np.polyfit(x_values, y_values, fit_polynomial)
                 p = np.poly1d(z)
-                plt.plot(x_values, p(x_values), color=model_color_mapping[model], label=model)
+                plt.plot(x_values, p(x_values), 
+                        color=model_color_mapping[model], 
+                        label=model.replace('pythia-', ''))
             else:
-                plt.plot(x_values, y_values, color=model_color_mapping[model], label=model)
-            texts.append(plt.text(x_values[-1], y_values[-1], model, ha='left', va='bottom', fontsize=12))
+                plt.plot(x_values, y_values, 
+                        color=model_color_mapping[model], 
+                        label=model.replace('pythia-', ''),
+                        linestyle=linestyle)  # Increase line width for better visibility
+            # texts.append(plt.text(x_values[-1], y_values[-1], model, ha='left', va='bottom', fontsize=fontsize))
+        
+        # adjust_text(texts, arrowprops=dict(arrowstyle='->', color='red'))
+        plt.xlabel('# N-grams (n)', fontsize=fontsize)
+        plt.ylabel('BLEU Score', fontsize=fontsize)
+
+        # set min x value to 0
+        # plt.xlim(left=0)
+
+        # Custom legend
+        handles, labels = plt.gca().get_legend_handles_labels()
+        # for handle in handles:
+        #     handle.set_linewidth(3)  # Make lines thicker
+        #     handle.set_markersize(8)  # Make markers larger
+
 
         for dataset in dataset_scores:
+            foreign_lang = dataset.split("-")[0]
             plt.scatter(dataset_scores[dataset][x_key], dataset_scores[dataset]['score'], 
-                        color=color_mapping[dataset], label=dataset, s=100)
+                        color=color_mapping[dataset], 
+                        # label=dataset, 
+                        s=50, 
+                        marker=LANG_MARKERS.get(foreign_lang, 'o'),
+                        zorder=10)  # Default to 'o' if not found
 
-        adjust_text(texts, arrowprops=dict(arrowstyle='->', color='red'))
+        # plt.legend(handles, labels, bbox_to_anchor=(1.2, 1), loc='upper right', fontsize=fontsize)
 
-        plt.xlabel(x_key, fontsize=15)
-        plt.ylabel('BLEU Score', fontsize=15)
-        plt.legend(bbox_to_anchor=(1.2, 1), loc='upper right')
-        if name is not None:
-            plt.title(name)
+        # if name is not None:
+        #     plt.title(name, fontsize=fontsize)
         if log_axis:
             plt.xscale('log')
+        
+        plt.tight_layout()
         fig_name = os.path.join(self.plot_path, f"lang_scores_{name.replace(' ', '_')}")
         plt.savefig(fig_name + ".png")
         plt.savefig(fig_name + ".pdf")
         print(f"Saved figure to {fig_name}.png")
+
+    # def plot_scores(self, model_scores, dataset_scores,
+    #                 color_mapping, 
+    #                 model_color_mapping,
+    #                 x_key='n_samples', name=None,
+    #                 log_axis=False,
+    #                 fit_polynomial=None,
+    #                 ax=None, y_limits=None,
+    #                 show_legend=True, show_xlabel=True,
+    #                 show_ylabel=True):
+    #     if ax is None:
+    #         plt.figure(figsize=(9.5, 7.5))
+    #         texts = []
+    #     else:
+    #         texts = []
+
+    #     for model in model_scores:
+    #         # Sort the data by x-values
+    #         sorted_indices = np.argsort(model_scores[model][x_key])
+    #         x_values = np.array(model_scores[model][x_key])[sorted_indices]
+    #         y_values = np.array(model_scores[model]['score'])[sorted_indices]
+
+    #         if fit_polynomial:
+    #             z = np.polyfit(x_values, y_values, fit_polynomial)
+    #             p = np.poly1d(z)
+    #             if ax is None:
+    #                 plt.plot(x_values, p(x_values), color=model_color_mapping[model], label=model)
+    #             else:
+    #                 ax.plot(x_values, p(x_values), color=model_color_mapping[model], label=model)
+    #         else:
+    #             if ax is None:
+    #                 plt.plot(x_values, y_values, 
+    #                          color=model_color_mapping[model], label=model,
+    #                          linestyle='--', linewidth=2)
+    #             else:
+    #                 ax.plot(x_values, y_values, 
+    #                         color=model_color_mapping[model], label=model,
+    #                         linestyle='--')
+    #         if ax is None:
+    #             texts.append(plt.text(x_values[-1], y_values[-1], model, ha='left', va='bottom', fontsize=fontsize))
+    #         else:
+    #             pass
+    #             # texts.append(ax.text(x_values[-1], y_values[-1], model, ha='left', va='bottom', fontsize=12))
+
+    #     markers = ['o', 's', 'D', 'v', '^', 'p', '*', 'h', 'x', '+']
+    #     for i, dataset in enumerate(dataset_scores):
+    #         if ax is None:
+    #             plt.scatter(dataset_scores[dataset][x_key], dataset_scores[dataset]['score'], 
+    #                     color=color_mapping[dataset], label=dataset, s=125, marker=markers[i % len(markers)])
+    #         else:
+    #             ax.scatter(dataset_scores[dataset][x_key], dataset_scores[dataset]['score'], 
+    #                 color=color_mapping[dataset], label=dataset, s=100, linestyle='--', marker=markers[i % len(markers)])
+
+    #     if ax is None:
+    #         adjust_text(texts, arrowprops=dict(arrowstyle='->', color='red'))
+
+    #         plt.xlabel(x_key, fontsize=15)
+    #         plt.ylabel('BLEU Score', fontsize=15)
+    #         plt.legend(bbox_to_anchor=(1.2, 1), loc='upper right')
+    #         if name is not None:
+    #             plt.title(name)
+    #         if log_axis:
+    #             plt.xscale('log')
+    #         fig_name = os.path.join(self.plot_path, f"lang_scores_{name.replace(' ', '_')}")
+    #         plt.savefig(fig_name + ".png")
+    #         plt.savefig(fig_name + ".pdf")
+    #         print(f"Saved figure to {fig_name}.png")
+    #     else:
+    #         if show_xlabel:
+    #             ax.set_xlabel(x_key, fontsize=15)
+    #         if show_ylabel:
+    #             ax.set_ylabel('BLEU Score', fontsize=15)
+    #         if show_legend:
+    #             ax.legend(bbox_to_anchor=(1.2, 1), loc='upper right')
+    #         if name is not None:
+    #             ax.set_title(name)
+    #         if log_axis:
+    #             ax.set_xscale('log')
+        
+    #     if y_limits is not None:
+    #         if ax is None:
+    #             plt.ylim(y_limits)
+    #         else:
+    #             ax.set_ylim(y_limits)
     
     def plot_average_scores(self, dataset_scores, model_scores, color_mapping, 
                        model_list=None, x_key='n_samples',
-                       log_axis=False, title=None, annotate=False):
+                       log_axis=False, title=None, annotate=False, show_legend=True):
         avg_dataset_scores = collections.defaultdict(lambda: collections.defaultdict(list))
         avg_scores = {'score': [], x_key: []} 
 
@@ -1378,21 +1770,35 @@ class WimbdAnalysis:
 
     def plot_model_size_vs_scores(self, results_dict, models, 
                                   model_param_map, color_mapping):
-        for dataset in results_dict:
-            scores = [results_dict[dataset][model] for model in models]
-            plt.scatter([model_param_map[model] for model in models], scores, color=color_mapping[dataset], label=dataset)
-            plt.plot([model_param_map[model] for model in models], scores, color=color_mapping[dataset])
-        
-        plt.axvline(x=1e09, color='black', linestyle='--')
-        plt.text(1e09, 30, '1b', fontsize=12)
-        plt.axvline(x=410e06, color='black', linestyle='--')
-        plt.text(410e06, 30, '410M', fontsize=12)
+        plt.figure(figsize=(6, 4.5))
 
-        plt.title("Model Size vs. Dataset Scores")
-        plt.xlabel("Number of Parameters")
-        plt.ylabel("BLEU Score")
+        for dataset in results_dict:
+            print(f"dataset: {dataset}")
+            non_en_lang = dataset.split("-")[0]
+            scores = [results_dict[dataset][model] for model in models]
+            plt.scatter([model_param_map[model] for model in models], 
+                        scores, color=color_mapping[dataset], label=dataset, 
+                        marker=LANG_MARKERS.get(non_en_lang, 'o'),
+                        s=50)
+            plt.plot([model_param_map[model] for model in models], scores, 
+                     color=color_mapping[dataset])
+        
+        fontisize = 14
+
+        plt.axvline(x=1e09, color='black', linestyle='--')
+        plt.text(1e09, 30, '1b', fontsize=fontisize)
+        plt.axvline(x=410e06, color='black', linestyle='--')
+        plt.text(410e06, 30, '410M', fontsize=fontisize)
+
+        # plt.title("Model Size vs. Dataset Scores")
+        plt.xlabel("Number of Parameters", fontsize=fontisize)
+        plt.ylabel("BLEU Score", fontsize=fontisize)
+        # set xvalues and yvalues
+        plt.xticks(fontsize=fontisize)
+        plt.yticks(fontsize=fontisize)
         plt.xscale('log')
-        plt.legend()
+        plt.legend(fontsize=fontisize-3)
+        plt.tight_layout()
         fig_name = os.path.join(self.plot_path, "model_size_vs_scores")
         plt.savefig(fig_name + ".png")
         plt.savefig(fig_name + ".pdf")
@@ -1501,36 +1907,54 @@ class WimbdAnalysis:
         return language_freqs
 
 
-    def calculate_mutual_information(self, dist1, dist2, smoothing=1e-5):
-        if isinstance(dist1, dict):
-            dist1 = np.array(list(dist1.values()))
-            dist2 = np.array(list(dist2.values()))
-
-        # Apply smoothing by adding a small constant to each frequency
-        dist1_smoothed = dist1 + smoothing
-        dist2_smoothed = dist2 + smoothing
-
-        # Convert the smoothed distributions to probability distributions
-        prob_dist1 = dist1_smoothed / np.sum(dist1_smoothed)
-        prob_dist2 = dist2_smoothed / np.sum(dist2_smoothed)
-
-        # assert same shape
-        assert prob_dist1.shape == prob_dist2.shape, f"prob_dist1.shape: {prob_dist1.shape}, prob_dist2.shape: {prob_dist2.shape}"
-
-        # assert proper probability distribution
-        assert np.isclose(np.sum(prob_dist1), 1.0)
-        assert np.isclose(np.sum(prob_dist2), 1.0)
-
-        # # Calculate the joint distribution
-        # joint_dist = np.outer(prob_dist1, prob_dist2)
-
-        # # Calculate the mutual information
-        # mutual_info = entropy(prob_dist1) + entropy(prob_dist2) - entropy(joint_dist.flatten())
-
-        # calculate kl div
-        mutual_info = entropy(prob_dist1, prob_dist2)
+    def calculate_mutual_information(self, lang_dfs, lang_ds, smoothing=1e-5):
+        """
+        Calculate mutual information between language distributions.
         
-        return mutual_info
+        Args:
+            lang_dfs: Dictionary of DataFrames containing language pair data
+            lang_ds: Dictionary of language datasets
+            smoothing: Small constant for smoothing probabilities
+        """
+        # Extract frequency values from DataFrames
+        lang_frequencies = {}
+        for lang, df in lang_dfs.items():
+            lang_frequencies[lang] = df['value'].values
+        
+        # Calculate pairwise mutual information
+        lang_mutual_info = {}
+        for lang1 in lang_frequencies:
+            lang_mutual_info[lang1] = {}
+            for lang2 in lang_frequencies:
+                if lang1 != lang2:
+                    # Get frequency distributions
+                    dist1 = lang_frequencies[lang1]
+                    dist2 = lang_frequencies[lang2]
+                    
+                    # Ensure arrays are of same length by padding shorter one
+                    max_len = max(len(dist1), len(dist2))
+                    dist1_padded = np.pad(dist1, (0, max_len - len(dist1)), 'constant', constant_values=smoothing)
+                    dist2_padded = np.pad(dist2, (0, max_len - len(dist2)), 'constant', constant_values=smoothing)
+                    
+                    # Apply smoothing
+                    dist1_smoothed = dist1_padded + smoothing
+                    dist2_smoothed = dist2_padded + smoothing
+                    
+                    # Convert to probability distributions
+                    prob_dist1 = dist1_smoothed / np.sum(dist1_smoothed)
+                    prob_dist2 = dist2_smoothed / np.sum(dist2_smoothed)
+                    
+                    # Calculate KL divergence
+                    mutual_info = entropy(prob_dist1, prob_dist2)
+                    lang_mutual_info[lang1][lang2] = mutual_info
+        
+        # Calculate merged mutual information
+        merged_mutual_info = {}
+        for lang in lang_frequencies:
+            if lang in lang_mutual_info:
+                merged_mutual_info[lang] = np.mean(list(lang_mutual_info[lang].values()))
+        
+        return lang_mutual_info, merged_mutual_info
 
 
     def merge_distributions(self, distribution_dict):
@@ -1765,9 +2189,9 @@ class ProcessTriviaQA:
         df_dict = {model: remove_nested_lists(data) for model, data in df_dict.items()}
         df_dict = {model: ProcessTriviaQA.create_exact_match_column(data) for model, data in df_dict.items()}
         df_0 = df_dict[list(df_dict.keys())[0]]
-        df_aligned = ProcessTriviaQA.calculate_alignment_scores(df_0, gpu=3)
-        # df_dict = {model: data.iloc[keep_indices] for model, data in df_dict.items()}
-        df_dict = {model: data.assign(align_score=df_aligned['align_score']) for model, data in df_dict.items()}
+        # df_aligned = ProcessTriviaQA.calculate_alignment_scores(df_0, gpu=3)
+        # # df_dict = {model: data.iloc[keep_indices] for model, data in df_dict.items()}
+        # df_dict = {model: data.assign(align_score=df_aligned['align_score']) for model, data in df_dict.items()}
         return df_dict
 
     @staticmethod
@@ -1776,7 +2200,8 @@ class ProcessTriviaQA:
         return examples
     
     @staticmethod
-    def calculate_alignment_scores(df, batch_size=256, gpu=None):
+    def calculate_alignment_scores(df, batch_size=256, gpu=None,
+                                   col_1='Q', col_2='question'):
         """
         Calculate the alignment scores between 'Q' and 'Question' columns and add them as a new column 'align_score'.
         Drop rows where the alignment score falls below the threshold.
@@ -1802,8 +2227,8 @@ class ProcessTriviaQA:
             pbar.update(min(batch_size, num_rows - i))
 
             # Get the batch of 'Q' and 'Question' columns
-            batch_text_1 = df['Q'][i:i+batch_size].tolist()
-            batch_text_2 = df['question'][i:i+batch_size].tolist()
+            batch_text_1 = df[col_1][i:i+batch_size].tolist()
+            batch_text_2 = df[col_2][i:i+batch_size].tolist()
 
             # Calculate the alignment scores for the batch
             batch_scores = align_pairs_e5(batch_text_1, batch_text_2, gpu=gpu)
@@ -1867,17 +2292,24 @@ class ProcessTriviaQA:
                                   log_axis=False, save_pth=None, 
                                   ax=None, color=None, label=None,
                                   title=None, x_label=None,
-                                  plot_scatter=False, plot_std=False):
+                                  plot_scatter=False, plot_std=False,
+                                  xlimits=None, ylimits=None):
         
         # Check if the columns exist in the DataFrame
         if x_column not in df.columns or y_column not in df.columns:
             raise ValueError(f"Columns {x_column} and/or {y_column} not found in DataFrame")
+        
+        # set all fonts to 14
+        plt.rcParams.update({'font.size': 14})
 
         # Remove rows with missing values in the specified columns
         df = df.dropna(subset=[x_column, y_column])
 
         # Convert the x_column to string type if not already
         df[x_column] = df[x_column].astype(str)
+        
+        # color_map = Colors.model_colormap
+        # model_2_color = {model: color_map(i - 1 - i / len(PYTHIA_MODEL_NAMES)) for i, model in reversed(enumerate(PYTHIA_MODEL_NAMES))}
 
         # Extract the numeric value for the x_column if it's an interval
         if any(char in df[x_column].iloc[0] for char in '[]()'):
@@ -1901,13 +2333,13 @@ class ProcessTriviaQA:
 
         # Create a new figure and axis if ax is not provided
         if ax is None:
-            fig, ax = plt.subplots(figsize=(10, 6))
+            fig, ax = plt.subplots(figsize=(5.5, 5.5))
 
         # Create a line plot on the provided or new axis
         ax.plot(avg_df[x_values], avg_df['avg_y'], marker='o', color=color, label=label)
         ax.set_xlabel(x_column)
         ax.set_ylabel(f'Average {y_column}')
-        ax.set_title(f'Average {y_column} by {x_column}')
+        # ax.set_title(f'Average {y_column} by {x_column}')
 
         # Optionally plot standard deviation
         if plot_std:
@@ -1919,30 +2351,38 @@ class ProcessTriviaQA:
             ax.fill_between(avg_df[x_values], 
                             avg_df['avg_y'] - std_by_x.values, 
                             avg_df['avg_y'] + std_by_x.values, 
-                            color=color, alpha=0.05)
+                            color=color, alpha=0.1)
 
         # optionally plot the individual points
         if plot_scatter:
-            ax.scatter(df[x_column], df[y_column], color=color, alpha=0.5)
+            ax.scatter(df[x_column], df[y_column], color=color, alpha=0.25)
+        
+        if xlimits is not None:
+            ax.set_xlim(xlimits)
+        
+        if ylimits is not None:
+            ax.set_ylim(ylimits)
 
         if log_axis:
             ax.set_xscale('log')
         
-        if title is not None:
-            ax.set_title(title)
+        # if title is not None:
+        #     ax.set_title(title)
         
         if x_label is None:
-            ax.set_xlabel('# N-grams')
+            ax.set_xlabel('N-grams (n)')
         else:
             ax.set_xlabel(x_label)
-        ax.set_ylabel('Performance')
+        ax.set_ylabel('Accuracy (p)')
 
-        # Make the legend flat and position it at the bottom
-        ncol = len(ax.lines) // 3
-        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), 
-                  ncol=ncol if ncol >= 1 else 1)
+        # # Make the legend flat and position it at the bottom
+        ncol = len(ax.lines) // 6
+        # ax.legend(loc='upper left', 
+        #           ncol=ncol if ncol >= 1 else 1)
+        bbox_to_anchor=(0.5, -0.15),
 
-        plt.tight_layout(rect=[0, 0.15, 1, 1])  # Adjust the bottom space for the legend
+        # plt.tight_layout()
+        # plt.tight_layout(rect=[0, 0.15, 1, 1])  # Adjust the bottom space for the legend
 
         if save_pth is not None:
             os.makedirs(os.path.dirname(save_pth), exist_ok=True)
@@ -2012,6 +2452,21 @@ class ProcessTriviaQA:
     
 #     return merged_df
 
+# # Assuming BASE_PATH is defined
+# # Process all tasks
+# example_dfs_all_filename = os.path.join(BASE_PATH, 'example_dfs_all_exact.csv')
+# example_dfs_all = match_and_update_ids(example_dfs_all, model_instance_results_all['pythia-12b'], example_dfs_all_filename)
+
+# # Process common tasks
+# example_dfs_common_filename = os.path.join(BASE_PATH, 'example_dfs_common_exact.csv')
+# example_dfs_common = match_and_update_ids(example_dfs_common, model_instance_results_common['pythia-12b'], example_dfs_common_filename)
+# # Process all tasks
+# example_dfs_all_filename = os.path.join(BASE_PATH, 'example_dfs_all_exact.csv')
+# example_dfs_all = match_and_update_ids(example_dfs_all, model_instance_results_all['pythia-12b'], example_dfs_all_filename)
+
+# # Process common tasks
+# example_dfs_common_filename = os.path.join(BASE_PATH, 'example_dfs_common_exact.csv')
+# example_dfs_common = match_and_update_ids(example_dfs_common, model_instance_results_common['pythia-12b'], example_dfs_common_filename)
 # # Assuming BASE_PATH is defined
 # # Process all tasks
 # example_dfs_all_filename = os.path.join(BASE_PATH, 'example_dfs_all_exact.csv')

@@ -21,6 +21,10 @@ set_seed(420)
 import argparse
 from src.wimbd_ import WimbdTasks, DataConfigs, _load_dataset, clean_text
 
+from wimbd_preprocess import parse_args as preprocess_parse_args, main as preprocess_main
+from wimbd_process import parse_args as process_parse_args, main as process_main
+
+
 import logging
 es_logger = logging.getLogger('elasticsearch')
 es_logger.setLevel(logging.ERROR)
@@ -41,6 +45,37 @@ def get_nested_value(dct, key_path):
     else:
         raise ValueError(f"key_path must be of type str or list, not {type(key_path)}")
     return dct
+
+def run_preprocess(args, method, save_path):
+    preprocess_args = preprocess_parse_args(args=[])
+    preprocess_args.n_grams = args.n_grams
+    preprocess_args.base_dir = save_path
+    preprocess_args.task = args.dataset
+    preprocess_args.method = method
+    return preprocess_main(preprocess_args)
+
+def run_process(args, method, preprocessed_data, save_path):
+    process_args = process_parse_args(args=[])
+    process_args.base_dir = save_path
+    process_args.dataset = args.dataset
+    process_args.method = method
+    process_args.n_grams = args.n_grams
+
+    if method == "all":
+        preprocessed_file_path = preprocessed_data["dfs_all"]["path"]
+    elif method == "common":
+        preprocessed_file_path = preprocessed_data["dfs_common_filtered"]["path"]
+    else:
+        print(f"Invalid method: {method}")
+        return
+
+    if os.path.exists(preprocessed_file_path):
+        process_args.filename = os.path.basename(preprocessed_file_path)
+    else:
+        print(f"Preprocessed file not found: {preprocessed_file_path}")
+        return
+
+    process_main(process_args)
 
 def parse_args():
     if running_jupyter():
@@ -65,8 +100,9 @@ def parse_args():
         parser.add_argument("--n_samples", type=int, default=None, help="Number of samples to use")
         parser.add_argument("--no_split_text2", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable splitting of text2")
         parser.add_argument("--filter_keywords", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable filtering of keywords")
-        parser.add_argument("--filter_stopwords", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable filtering of stopwords")
+        parser.add_argument("--filter_stopwords", type=lambda x: bool(strtobool(x)), default=None, help="Explicitly enable or disable filtering of stopwords")
         parser.add_argument("--filter_punc", type=lambda x: bool(strtobool(x)), default=True)
+        parser.add_argument("--align_pairs", type=lambda x: bool(strtobool(x)), default=True)
         parser.add_argument("--replace_keywords", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable filtering of kewywords")
         parser.add_argument("--only_alpha", type=lambda x: bool(strtobool(x)), default=False, help="Explicitly enable or disable filtering of non-alphabetic characters")
         parser.add_argument("--delimeter", type=str, default=" ", help="Delimeter to use for splitting text")
@@ -75,6 +111,14 @@ def parse_args():
     return args
 
 def main(args):
+
+    # SETUP PARAMS ACCORDING TO NGRAMS
+    if args.filter_stopwords is None:
+        if args.n_grams <= 3:
+            args.filter_stopwords = True
+        else:
+            args.filter_stopwords = False
+
     base = f"./results/n-grams/{args.dataset}/{args.corpus}"
     if args.name is None:
         base_path = os.path.join(base, f"./exp_3/test-set")
@@ -120,7 +164,8 @@ def main(args):
     else:
         raise ValueError(f"Method {args.type} not recognized")
 
-    wt = WimbdTasks()
+    wt = WimbdTasks(align_pairs=args.align_pairs, 
+                    language_pair=args.language_pair)
     print(f"type: {args.type}, index: {index}, corpus: {args.corpus}")
 
     print(f"tasks: {args.tasks}")
@@ -172,7 +217,8 @@ def main(args):
             if len(task_ds) < args.n_samples:
                 print(f"Skipping task {task_name} because it has less than {args.n_samples} samples")
                 continue
-            indexes =  np.random.choice(len(task_ds), args.n_samples, replace=False)
+            # indexes =  np.random.choice(len(task_ds), args.n_samples, replace=False)
+            indexes = np.arange(args.n_samples)
             task_ds_full = task_ds.select(indexes)
             # save indexes
             if not args.debug:
@@ -187,6 +233,7 @@ def main(args):
             start_time = time.time()
 
             dataset_keys = DataConfigs.data_keys[args.dataset]
+            answer_key = dataset_keys.get('answer', None)
 
             if args.dataset in ["wmt", "europarl"]:
                 text_1_key = ['translation', args.language_pair[0]]
@@ -196,19 +243,23 @@ def main(args):
                 text_2_key = dataset_keys['text_2']
             else:
                 text_1_key, text_2_key = dataset_keys['text_1'], dataset_keys['text_2']
+
+            if answer_key is not None:
+                answer = get_nested_value(example, answer_key)
+                print(f"Answer: {answer}")
             
             print(f"example: {example}")
             text_1 = get_nested_value(example, text_1_key)
             text_2 = get_nested_value(example, text_2_key)
 
-            
             # clean text
             clean = partial(clean_text, 
                             dataset=args.dataset, 
                             filter=args.filter_keywords, 
                             replace=args.replace_keywords)
+            
             text_1_ori, text_2_ori = text_1, text_2
-            text_1, text_2 = map(clean, [text_1, text_2])
+            text_1, text_2 = clean(text_1), clean(text_2, answer_idx=answer)
             print(f"Text 1: {text_1_ori} -> {text_1}")
             print(f"Text 2: {text_2_ori} -> {text_2}")
             
@@ -223,7 +274,9 @@ def main(args):
                                                         no_split_text2=args.no_split_text2,
                                                         filter_stopwords=args.filter_stopwords,
                                                         filter_punc=args.filter_punc,
-                                                        only_alpha=args.only_alpha)
+                                                        only_alpha=args.only_alpha,
+                                                        align_pairs=args.align_pairs)
+                
                 if args.debug:
                     print(f"Question: {text_1}, Answer: {text_2}")
                     print(f"ngram_combinations: {ngram_combinations}")
@@ -349,6 +402,20 @@ def main(args):
         with open(os.path.join(save_path, "completed.txt"), 'w') as f:  # Open in text mode
             f.write("completed")
 
+    if not args.debug:
+        with open(os.path.join(save_path, "completed.txt"), 'w') as f:  # Open in text mode
+            f.write("completed")
+
+    # # Run wimbd_preprocess.py for the "all" method
+    # if args.method in [None, "all"]:
+    #     preprocessed_data_all = run_preprocess(args, "all", save_path)
+    #     run_process(args, "all", preprocessed_data_all, save_path)
+
+    # # Run wimbd_preprocess.py for the "common" method
+    # if args.method in [None, "common"]:
+    #     preprocessed_data_common = run_preprocess(args, "common", save_path)
+    #     run_process(args, "common", preprocessed_data_common, save_path)
+    
 
 
 if __name__ == "__main__":
@@ -359,7 +426,14 @@ if __name__ == "__main__":
             args.method = method
             main(args)
     else:
-        main(args)
+        if args.dataset == 'wmt09_gens':
+            tasks = args.tasks
+            for task in tasks:
+                args.tasks = [task]
+                print(f"Processing task {task}")
+                main(args)
+        else:
+            main(args)
 
 
 """
@@ -376,6 +450,22 @@ CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
                         --name local/all \
                         --method common
 
+CUDA_VISIBLE_DEVICES=1 python wimbd_search.py \
+                        --type infini \
+                        --corpus pile \
+                        --n_grams 2 \
+                        --dataset mmlu \
+                        --replace_keywords false \
+                        --filter_stopwords true \
+                        --only_alpha false \
+                        --name exp5 \
+                        --align_pairs true \
+                        --tasks marketing \
+                                management \
+                                high_school_world_history \
+                                high_school_european_history \
+                                miscellaneous \
+                        --method common
                         
 # Example usage for translation
 CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
@@ -390,6 +480,7 @@ CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
                         --get_docs false \
                         --debug
 
+
 # Example usage for translation GENS
 CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
                         --type infini \
@@ -397,11 +488,12 @@ CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
                         --n_grams 2 \
                         --method common \
                         --dataset wmt09_gens \
-                        --tasks pythia-12b \
+                        --tasks pythia-160m \
                         --language_pair en es \
                         --filter_stopwords false \
                         --replace_keywords false \
                         --only_alpha false \
+                        --debug \
                         --get_docs false 
 
 
@@ -416,5 +508,6 @@ CUDA_VISIBLE_DEVICES="" python wimbd_search.py \
                         --only_alpha false \
                         --n_samples 500 \
                         --name debug
+
 
 """

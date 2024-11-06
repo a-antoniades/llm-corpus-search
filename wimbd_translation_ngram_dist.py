@@ -43,8 +43,6 @@ LANG_COL_COMMON = 'lang_2'
 LANG_COL_ALL = 'fr'
 LANG_COL = 'fr'
 VALUE_COL = 'value' # 'value_diff'
-NAME = 'log(en, fr), p=0.975'  # - log(p_en")'
-
 model = 'EleutherAI/pythia-12b'
 tokenizer = AutoTokenizer.from_pretrained(model)
 
@@ -398,7 +396,8 @@ def fit_and_evaluate_linear_regression(df, column_1, column_2,
 
     return model, df_test, stats
 
-def plot_len_ngrams_vs_kldiv(df, y_axis='lm_probs_kldiv', save_pth=None):
+def plot_len_ngrams_vs_kldiv(df, y_axis='lm_probs_kldiv', save_pth=None,
+                             name="ngrams vs kldiv"):
     # Ensure the necessary columns are in the DataFrame
     if 'len_ngrams' not in df or 'lm_probs_kldiv' not in df:
         raise ValueError("DataFrame must contain 'len_ngrams' and 'lm_probs_kldiv' columns.")
@@ -431,7 +430,7 @@ def plot_len_ngrams_vs_kldiv(df, y_axis='lm_probs_kldiv', save_pth=None):
     plt.tight_layout()
     
     if save_pth is not None:
-        plotname = f"len_ngrams_vs_{y_axis}_{NAME}.png"
+        plotname = f"len_ngrams_vs_{y_axis}_{name}.png"
         plt.savefig(os.path.join(save_pth, plotname))
     
     plt.show()
@@ -449,6 +448,8 @@ def parse_args():
         parser.add_argument("--model_results_base_path")
         parser.add_argument("--model", default=None)
         parser.add_argument("--save_pth", default="./figures/translation/dist")
+        parser.add_argument("--examples_pth", default=None)
+        parser.add_argument("--lang_pair", default="en-fr")
         parser.add_argument("--exp_name")
         parser.add_argument("--debug", action="store_true", default=False)
         args = parser.parse_args()
@@ -456,6 +457,7 @@ def parse_args():
 
 def main(args):
     SAVE_PTH = os.path.join(args.save_pth, args.model, args.exp_name)
+    NAME = f'log({args.lang_pair}), p=0.975'  # - log(p_en")'
     os.makedirs(SAVE_PTH, exist_ok=True)
     
     # model_results_pth =  "./models/pythia/debug"
@@ -475,19 +477,23 @@ def main(args):
     # examples_pth = "./results/n-grams/wmt/pile/exp4/n_samples_None_fkeyFalse_rkeyFalse_fstopTrue_onlyalphaTrue/1/all/lang_dfs_filter_charsFalse_percentile0.95.pkl"
     # europarl
     # All
-    examples_pth_all = "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue/2/all/lang_dfs_is_allTrue_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesTrue.pkl"
-    # examples_pth_all = "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue/2/all/lang_dfs_is_allTrue_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesTrue_filter_stopwordsTrue.pkl"
-    # examples_pth_all = "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue/2/all/lang_dfs_is_allTrue_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesTrue_filter_stopwordsFalse_remove_englishFalse_remove_non_englishTrue.pkl"
-    examples_all = pickle.load(open(examples_pth_all, "rb"))['en-fr']
-    examples_all = filter_percentile(examples_all, 0.95)
-    # common
-    examples_pth_common = "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue/2/common/lang_dfs_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesTrue_align_langs0.pkl"
-    # examples_pth_common = "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue/2/all/lang_dfs_is_allTrue_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesTrue_filter_stopwordsTrue.pkl"
-    # examples_pth_common = "./incidental-supervision/results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue/2/common/lang_dfs_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesTrue_filter_stopwordsTrue_align_langs0.pkl"
-    examples_common = pickle.load(open(examples_pth_common, "rb"))['en-fr']
-    examples_common = filter_percentile(examples_common, 0.975)
-
-    examples_diff = subtract_values(examples_all, examples_common, LANG_COL_ALL, LANG_COL_COMMON, 'value')
+    if args.examples_pth is None:
+        examples_pth_all = "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue/2/all/lang_dfs_is_allTrue_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesTrue.pkl"
+        # examples_pth_all = "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue/2/all/lang_dfs_is_allTrue_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesTrue_filter_stopwordsTrue.pkl"
+        # examples_pth_all = "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue/2/all/lang_dfs_is_allTrue_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesTrue_filter_stopwordsFalse_remove_englishFalse_remove_non_englishTrue.pkl"
+        examples_all = pickle.load(open(examples_pth_all, "rb"))[args.lang_pair]
+        examples_all = filter_percentile(examples_all, 0.95)
+        # common
+        examples_pth_common = "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue/2/common/lang_dfs_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesTrue_align_langs0.pkl"
+        # examples_pth_common = "./results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue/2/all/lang_dfs_is_allTrue_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesTrue_filter_stopwordsTrue.pkl"
+        # examples_pth_common = "./incidental-supervision/results/n-grams/europarl/pile/exp4/n_samples_20000_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaTrue/2/common/lang_dfs_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesTrue_filter_stopwordsTrue_align_langs0.pkl"
+        examples_common = pickle.load(open(examples_pth_common, "rb"))[args.lang_pair]
+        examples_common = filter_percentile(examples_common, 0.975)
+        examples_diff = subtract_values(examples_all, examples_common, LANG_COL_ALL, LANG_COL_COMMON, 'value')
+    else:
+        examples_pth_common = args.examples_pth
+        examples_common = pickle.load(open(examples_pth_common, "rb"))[args.lang_pair]
+        examples_common = filter_percentile(examples_common, 0.975)
 
     if args.debug:
         # keep only 1/20th of the data
@@ -507,17 +513,17 @@ def main(args):
     n_gram_log_dist = np.log(n_gram_dist).reset_index()
 
     # calculate ngram distribution
-    n_gram_dist_all = calc_ngram_dist(examples_all, LANG_COL_ALL, VALUE_COL)
+    # n_gram_dist_all = calc_ngram_dist(examples_all, LANG_COL_ALL, VALUE_COL)
     n_gram_dist_common = calc_ngram_dist(examples_common, LANG_COL_COMMON, VALUE_COL)
     # n_gram_dist = calc_ngram_dist(df, LANG_COL_COMMON, VALUE_COL)
 
     # subtract ngram log dist all from common
-    n_gram_dist_all_ = n_gram_dist_all.reset_index(name='log_prob')
+    # n_gram_dist_all_ = n_gram_dist_all.reset_index(name='log_prob')
     n_gram_dist_common_ = n_gram_dist_common.reset_index(name='log_prob')
     log_prob_col = 'log_prob'
-    n_gram_dist_diff = subtract_values(n_gram_dist_common_, n_gram_dist_all_, LANG_COL_COMMON, LANG_COL_ALL, log_prob_col)
-    n_gram_dist_diff.dropna(subset=[log_prob_col + '_diff'], inplace=True)
-    n_gram_dist_diff.reset_index(inplace=True)
+    # n_gram_dist_diff = subtract_values(n_gram_dist_common_, n_gram_dist_all_, LANG_COL_COMMON, LANG_COL_ALL, log_prob_col)
+    # n_gram_dist_diff.dropna(subset=[log_prob_col + '_diff'], inplace=True)
+    # n_gram_dist_diff.reset_index(inplace=True)
 
     VALUE_COL_DIST= log_prob_col + '_diff'
 
@@ -529,8 +535,8 @@ def main(args):
 
     # %%
     # examples_common[examples_common['value'] > 0]
-    df_common_factorized = calc_ngram_dist_factorized(examples_common, examples_all, LANG_COL_COMMON, LANG_COL_ALL)
-    VALUE_COL_DIST = 'log_dist_1'
+    # df_common_factorized = calc_ngram_dist_factorized(examples_common, examples_all, LANG_COL_COMMON, LANG_COL_ALL)
+    # VALUE_COL_DIST = 'log_dist_1'
 
     result_1 = doc_results[0]
     logit_1 = model_logits[result_1['id']]
@@ -583,13 +589,17 @@ def main(args):
                                                                                 save_pth=save_plot_pth,
                                                                                 title=f'Dataset Content (ds) vs. Language Model (lm) gens - {NAME}')
     
-    plot_len_ngrams_vs_kldiv(df_examples, 'lm_probs_kldiv', save_plot_pth)
+    plot_len_ngrams_vs_kldiv(df_examples, 'lm_probs_kldiv', 
+                             save_plot_pth, NAME)
     if 'lm_probs_mse' in df_examples.columns:
-        plot_len_ngrams_vs_kldiv(df_examples, 'lm_probs_mse', save_plot_pth)
+        plot_len_ngrams_vs_kldiv(df_examples, 'lm_probs_mse', 
+                                 save_plot_pth, NAME)
     if 'lm_probs_cross_entropy' in df_examples.columns:
-        plot_len_ngrams_vs_kldiv(df_examples, 'lm_probs_cross_entropy', save_plot_pth)
+        plot_len_ngrams_vs_kldiv(df_examples, 'lm_probs_cross_entropy', 
+                                 save_plot_pth, NAME)
     if 'lm_probs_xinyi' in df_examples.columns:
-        plot_len_ngrams_vs_kldiv(df_examples, 'lm_probs_xinyi', save_plot_pth)
+        plot_len_ngrams_vs_kldiv(df_examples, 'lm_probs_xinyi', 
+                                 save_plot_pth, NAME)
 
 
 
@@ -620,6 +630,18 @@ if __name__ == "__main__":
 CUDA_VISIBLE_DEVICES="" python wimbd_translation_ngram_dist.py \
                         --model_results_base_path "./models/experiment_6_logits_max_5/inference/" \
                         --save_pth "./figures/translation/dist" \
+                        --exp_name "wmt09-en-fr-0-shot-(en-fr)"
+                        
+
+
+- wmt09gens --
+-- 410m
+CUDA_VISIBLE_DEVICES="" python wimbd_translation_ngram_dist.py \
+                        --model_results_base_path ./models/experiment_6_logits_max_5/inference/ \
+                        --save_pth ./figures/translation/dist/wmt09gens/pythia-12b-gens \
+                        --lang_pair en-es \
+                        --examples_pth ./results/n-grams/wmt09_gens/pile/exp_3/test-set/pythia-12b/n_samples_None_fkeyFalse_rkeyFalse_fstopFalse_onlyalphaFalse/2/common/lang_dfs_filter_charsFalse_percentile0_detect_langFalse_filter_entitiesFalse_filter_stopwordsTrue_align_langs0.8_debugFalse.pkl \
+                        --model EleutherAI/pythia-12b \
                         --exp_name "wmt09-en-fr-0-shot-(en-fr)"
                         
 
