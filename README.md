@@ -1,6 +1,9 @@
 # LLM-Incidental-Supervision
 ## Incidental Supervision
 
+![Overview](assets/overview.png)
+*[We constuct an n-gram table for each downstream task by matching semantically simiar n-grams with the pretraining corpus (PILE). We then analyze the LLM predictions and their relationship to the table.]*
+
 ### Environment Setup
 
 Install the wimbd repo, and checkout the commit that I used.
@@ -11,7 +14,7 @@ git checkout 0b787c31f856a512f6289657eef10f852b2f936e
 cd ..
 ```
 
-Once you pull the repo, I added a `requirements.txt` file which you can use to install the dependencies.
+Once you pull the repo, refer to `requirements.txt` file to install the dependencies.
 
 ### Searching for N-grams in PILE
 
