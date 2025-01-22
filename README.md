@@ -20,6 +20,9 @@ Once you pull the repo, refer to `requirements.txt` file to install the dependen
 
 ### Searching for N-grams in PILE
 
+NOTE: To access the WIMBD database, you will need to fill in the form found here: https://wimbd.apps.allenai.org
+Alternatively, you can use the InfiniGram API, by specifying the `--type infini` flag.
+
 Here is an example of how to search for n-grams from some subtasks from MMLU in PILE.
 
 ```bash
