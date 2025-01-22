@@ -25,6 +25,8 @@ import langid
 from src.wimbd_ import WimbdAnalysis, _load_dataset
 from src.utils import remove_string
 
+from rapidfuzz import process, fuzz
+
 
 models = ['pythia-12b', 'pythia-6.9b', 'pythia-2.8b', 
         'pythia-1.4b', 'pythia-410m', 'pythia-160m', 
@@ -117,7 +119,7 @@ base_results_config = {
         {
             "instances":"question"
         }
-        }
+        },
     },
     "olmo": {
         "mmlu": {
@@ -348,7 +350,6 @@ def merge_and_process_dfs(task_dfs):
     
     return example_dfs
 
-from rapidfuzz import process, fuzz
 
 def find_matching_rows(df, src_phrase, ref_phrase):
     # Split the phrases into individual words

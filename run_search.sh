@@ -1,16 +1,16 @@
 # Configuration
-DATASET="triviaqa" # or "sciq" or "mmlu"
-CORPUS="pile" # or "dolma"
+DATASET="gsm8k" # or "sciq" or "mmlu"
+CORPUS="dolma" # or "dolma"
 N_GRAMS=3
-NAME="exp_3/validation-set"
-N_SAMPLES=20000
+NAME="rebuttal/wimbd/${CORPUS}/no_align/"
+TYPE="wimbd" # "rust" or "infini" or "wimbd"
+N_SAMPLES=1000
 
 # Run the script
-echo "Running script with ngram ${N_GRAMS}"
+echo "Running script with ngram ${N_GRAMS} for dataset ${DATASET} and corpus ${CORPUS}"
 
-CUDA_VISIBLE_DEVICES='' \
 python wimbd_search.py \
-    --type infini \
+    --type ${TYPE} \
     --corpus ${CORPUS} \
     --n_grams ${N_GRAMS} \
     --dataset ${DATASET} \
@@ -18,8 +18,7 @@ python wimbd_search.py \
     --filter_stopwords true \
     --filter_keywords false \
     --replace_keywords false \
-    --corpus ${CORPUS} \
     --only_alpha false \
-    --method all \
-    --name \"${NAME}\" \
-    --method all
+    --align_pairs false \
+    --method common \
+    --name "${NAME}-${DATASET}-${MODEL}"
