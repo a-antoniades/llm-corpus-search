@@ -1,5 +1,4 @@
-# LLM-Incidental-Supervision
-## Incidental Supervision
+### Code for the paper [Generalization v.s. Memorization: Tracing Language Models' Capabilities Back to Pretraining Data](https://arxiv.org/abs/2407.14985)
 
 ![Overview](assets/overview.png)
 
@@ -40,4 +39,18 @@ CUDA_VISIBLE_DEVICES=1 python wimbd_search.py \
                                 high_school_european_history \
                                 miscellaneous \
                         --method common
+```
+
+## Citation
+
+```bibtex
+@misc{wang2024generalizationvsmemorizationtracing,
+title={Generalization v.s. Memorization: Tracing Language Models' Capabilities Back to Pretraining Data},
+author={Xinyi Wang and Antonis Antoniades and Yanai Elazar and Alfonso Amayuelas and Alon Albalak and Kexun Zhang and William Yang Wang},
+year={2024},
+eprint={2407.14985},
+archivePrefix={arXiv},
+primaryClass={cs.CL},
+url={https://arxiv.org/abs/2407.14985},
+}
 ```
