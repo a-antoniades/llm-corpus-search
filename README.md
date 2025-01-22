@@ -3,13 +3,35 @@
 
 ### Environment Setup
 
-Once you pull the repo, I added a `requirements.txt` file, try to create your environment with that, although it may not work. In that case, please comment out the culprits from the file, and install the manually.
+Install the wimbd repo, and checkout the commit that I used.
+```bash
+git clone git@github.com:allenai/wimbd.git
+cd wimbd
+git checkout 0b787c31f856a512f6289657eef10f852b2f936e
+cd ..
+```
 
-### Plotting Translation results
+Once you pull the repo, I added a `requirements.txt` file which you can use to install the dependencies.
 
-Use `plot_translation.py` and set your `LANG_DF_PTH`. The file was made to be readily compatible with jupyter notebook execution.
+### Searching for N-grams in PILE
 
+Here is an example of how to search for n-grams from some subtasks from MMLU in PILE.
 
-### Viewing Ngram Search Dataframe (Xinyi)
-
-See `wimbd_translation_datasets.ipynb` for an example of how to load the dataframes and what you should see. You can see there is a column "docs" which shows from where in the pretraining corpus (PILE) the data was obtained. Let me know if you have any questions!
+```bash
+CUDA_VISIBLE_DEVICES=1 python wimbd_search.py \
+                        --type infini \
+                        --corpus pile \
+                        --n_grams 2 \
+                        --dataset mmlu \
+                        --replace_keywords false \
+                        --filter_stopwords true \
+                        --only_alpha false \
+                        --name exp5 \
+                        --align_pairs true \
+                        --tasks marketing \
+                                management \
+                                high_school_world_history \
+                                high_school_european_history \
+                                miscellaneous \
+                        --method common
+```

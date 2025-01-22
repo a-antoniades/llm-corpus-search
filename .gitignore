@@ -167,3 +167,18 @@ cython_debug/
 **/cache
 **/results
 **/.history
+
+# Directories
+flan/
+inference/
+
+# Python files
+gsm8k_to_dataset.py
+
+# Shell scripts
+run_search_gsm8k_gens.sh
+
+# Notebooks
+view_gsm8k.ipynb
+view_gsm8k_coprus_search.ipynb
+wimbd_analysis_gsm8k.ipynb

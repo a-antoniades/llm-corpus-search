@@ -1,6 +1,6 @@
 # %%
 import sys
-sys.path.append('/share/edc/home/antonis/LLM-Incidental-Supervision/wimbd')
+sys.path.append('./wimbd')
 import os
 import pickle
 from functools import partial
@@ -29,7 +29,7 @@ import logging
 es_logger = logging.getLogger('elasticsearch')
 es_logger.setLevel(logging.ERROR)
 
-CACHE_DIR = "/share/edc/home/antonis/datasets/huggingface"
+CACHE_DIR = os.environ.get("HF_HOME")
 
 # docs_v1.5_2023-11-02
 
@@ -140,7 +140,7 @@ def main(args):
         elif args.corpus == 'dolma':
             index = "docs_v1.5_2023-11-02"
             cloud_id = "dolma-v15:dXMtY2VudHJhbDEuZ2NwLmNsb3VkLmVzLmlvOjQ0MyQ1MjQyM2ZiNjk0NGE0YzdkOGQ5N2Y3NDM2MmMzODY3ZSQxMDNiM2ZkYTUwYzk0MTNmYmUwODA1ZDMyNjQ5YTliNQ=="
-            api_key = "QTJiajFJMEIxR1JtTm13YUZBVGc6dEpudXhEd19SRzJUOVZNYUpDdlItdw=="
+            api_key = "NWpUMVRaQUJMRTVCZmp2YVFMbTY6c2R5bFhBNHpRa09qd21iUldyc3pwUQ=="
         else:
             raise ValueError(f"Method {args.corpus} not recognized")
         es = Elasticsearch(
@@ -166,7 +166,7 @@ def main(args):
 
     wt = WimbdTasks(align_pairs=args.align_pairs, 
                     language_pair=args.language_pair)
-    print(f"type: {args.type}, index: {index}, corpus: {args.corpus}")
+    print(f"type: {args.type}, corpus: {args.corpus}")
 
     print(f"tasks: {args.tasks}")
     print(f"dataset: {args.dataset}")
@@ -186,7 +186,7 @@ def main(args):
     if not isinstance(ds, dict or not isinstance(ds, datasets.DatasetDict)):
         ds = {args.language_pair: ds}
 
-    for task_name, task_ds in tqdm(ds.items(), desc="Processing tasks", total=total_tasks):
+    for task_name, task_ds in tqdm(ds.items(), desc="Processing tasks", total=total_tasks, position=0, leave=True):
         
         # continue from a specific task
         if args.cont_from is not None:
@@ -227,7 +227,7 @@ def main(args):
         else:
             task_ds_full = task_ds
         
-        for idx, example in tqdm(enumerate(task_ds_full), desc=f"Processing examples for task {task_name}"):
+        for idx, example in tqdm(enumerate(task_ds_full), desc=f"Processing examples for task {task_name}", position=1, leave=True):
             print(f"Task {task_name}, ({completed_tasks}/{total_tasks}")
             print(example)
             start_time = time.time()
@@ -259,7 +259,11 @@ def main(args):
                             replace=args.replace_keywords)
             
             text_1_ori, text_2_ori = text_1, text_2
-            text_1, text_2 = clean(text_1), clean(text_2, answer_idx=answer)
+            # Only pass answer_idx if we have an answer
+            if answer_key is not None:
+                text_1, text_2 = clean(text_1), clean(text_2, answer_idx=answer)
+            else:
+                text_1, text_2 = clean(text_1), clean(text_2)
             print(f"Text 1: {text_1_ori} -> {text_1}")
             print(f"Text 2: {text_2_ori} -> {text_2}")
             
@@ -280,7 +284,10 @@ def main(args):
                 if args.debug:
                     print(f"Question: {text_1}, Answer: {text_2}")
                     print(f"ngram_combinations: {ngram_combinations}")
-                for n_gram in ngram_combinations:
+                for n_gram in tqdm(ngram_combinations, 
+                                 desc="Processing n-grams", 
+                                 position=2, 
+                                 leave=False):
                     success = False
                     while not success:
                         try:
@@ -328,7 +335,10 @@ def main(args):
                                                      filter_punc=args.filter_punc,
                                                      only_alpha=args.only_alpha)
                 print(f"ngram_combinations: {ngram_combinations}")
-                for n_gram in ngram_combinations:
+                for n_gram in tqdm(ngram_combinations, 
+                                 desc="Processing n-grams", 
+                                 position=2, 
+                                 leave=False):
                     success = False
                     while not success:
                         try:
@@ -386,7 +396,8 @@ def main(args):
             days, remainder = divmod(remaining_time, 24 * 3600)
             hours, remainder = divmod(remainder, 3600)
             minutes, _ = divmod(remainder, 60)
-            print(f"completed instance {idx}, remaining: {int(days)}d {int(hours)}h {int(minutes)}m")
+            # Keep both the progress bar and completion message
+            print(f"\rCompleted instance {idx}, remaining: {int(days)}d {int(hours)}h {int(minutes)}m", flush=True)
             
             # save as .pkl
             if not args.debug:
@@ -405,6 +416,8 @@ def main(args):
     if not args.debug:
         with open(os.path.join(save_path, "completed.txt"), 'w') as f:  # Open in text mode
             f.write("completed")
+    
+    print(f"Saved results to {save_path}")
 
     # # Run wimbd_preprocess.py for the "all" method
     # if args.method in [None, "all"]:

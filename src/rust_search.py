@@ -1,66 +1,68 @@
+import os
 import subprocess
 from functools import lru_cache
 
 DEFAULT_DATASET = 'tuluv2'
 name_to_path = {
-    # 'tuluv2': '/share/edc/home/antonis/datasets/huggingface/tuluv2_ds.json.gz',
-    'tuluv2': "/share/edc/home/antonis/datasets/huggingface/tuluv2_128/"
+    'tuluv2': "/share/edc/home/antonis/datasets/huggingface/tuluv2_128/",
+    'dolma': "/path/to/dolma/dataset"  # Add path to dolma dataset if needed
 }
 
 @lru_cache(maxsize=None)
-def count_ngram(dataset, search_string, es=None):
+def count_ngram(dataset_path, search_string, es=None):
     # Build the command to run the Rust CLI
     command = [
         "wimbd",
         "count",
-        dataset,
+        dataset_path,
         "--search",
-        f'"{search_string}"'
+        search_string
     ]
 
     try:
-        # Run the Rust CLI command and capture the output
-        output = subprocess.check_output(command, universal_newlines=True)
+        # Add environment variables to ensure cargo binaries are found
+        env = os.environ.copy()
+        env["PATH"] = f"{os.path.expanduser('~/.cargo/bin')}:{env['PATH']}"
+        
+        print(f"Running command: {' '.join(command)}")
+        output = subprocess.check_output(command, universal_newlines=True, env=env)
+        print(f"Raw output: {output}")
 
-        # Split the output into lines
         lines = output.strip().split("\n")
-
-        # Parse the count from the output string
-        count_str = lines[0].split("(count = ")[1].split(")")[0]
+        count_str = lines[-1].split("(count = ")[1].split(")")[0]
         count = int(count_str)
-
-        print(f"Search string: {search_string}")
-        print(f"Count: {count}")
 
         return count
 
     except subprocess.CalledProcessError as e:
         print(f"Error running Rust CLI: {e}")
-        return None
-
-    except IndexError:
-        print(f"Error parsing output: {lines}")
-        return None
+        return 0
+    except Exception as e:
+        print(f"Error processing output: {e}")
+        print(f"Command: {' '.join(command)}")
+        print(f"Output: {output if 'output' in locals() else 'No output'}")
+        return 0
 
 def count_documents_containing_phrases(dataset, phrases, es=None, all_phrases=True):
-    dataset = name_to_path[dataset]
+    if dataset not in name_to_path:
+        raise ValueError(f"Dataset {dataset} not found in name_to_path mapping")
+    
+    dataset_path = name_to_path[dataset]
+    if not os.path.exists(dataset_path):
+        raise ValueError(f"Dataset path {dataset_path} does not exist")
     
     counts = []
     for phrase in phrases:
-        count = count_ngram(dataset, phrase, es)
-        if count is None:
-            return None
+        count = count_ngram(dataset_path, phrase, es)
         counts.append(count)
 
     if all_phrases:
-        # Return the minimum count if all phrases are required
         combined_count = min(counts)
     else:
-        # Return the maximum count if any phrase is sufficient
         combined_count = max(counts)
 
     print(f"Phrases: {phrases}")
-    print(f"All phrases required: {all_phrases}")
+    print(f"Individual counts: {counts}")
     print(f"Combined count: {combined_count}")
 
     return combined_count

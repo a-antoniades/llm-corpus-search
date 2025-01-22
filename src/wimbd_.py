@@ -60,7 +60,7 @@ os.environ["HF_WEIGHTS_PATH"] = WEIGHTS_DIR
 MODEL_NAMES = [
     "OLMo-7B", "pythia-12b", "pythia-31m", "pythia-1.4b",
     "pythia-410m", "pythia-70m", "pythia-14m", "pythia-2.8b",
-    "pythia-6.9b", "pythia-160m"
+    "pythia-6.9b", "pythia-160m", "OLMo-1b", "OLMo-7b", "OLMo-7B-instruct"
 ]
 
 PYTHIA_MODEL_NAMES = [
@@ -213,6 +213,34 @@ def load_wmt09_gens(tasks=None, languages=None, **kwargs):
 
     return combined_dataset_dict
 
+def load_gsm8k_gens(tasks=None, **kwargs):
+    """
+    Load GSM8K generation results for different models.
+    
+    Args:
+        tasks: List of model names to load (e.g., ['pythia-410m', 'pythia-1b']). If None, loads all models.
+        **kwargs: Additional arguments (kept for consistency with other load functions)
+    
+    Returns:
+        Dictionary containing the loaded datasets, organized by model name
+    """
+    dataset_name = "gsm8k_gens"
+    dataset_dict = {}
+    
+    for model_name in MODEL_NAMES:
+        if tasks is None or model_name in tasks:
+            # Define the path for the current model's dataset
+            model_dataset_path = os.path.join(CACHE_DIR, f'{dataset_name}_{model_name}')
+            
+            try:
+                # Load the dataset from disk
+                dataset_dict[model_name] = load_from_disk(model_dataset_path)
+                print(f"Loaded dataset for model {model_name} from {model_dataset_path}")
+            except Exception as e:
+                print(f"Could not load dataset for model {model_name}: {e}")
+                continue
+
+    return dataset_dict
 
 def _load_dataset(dataset_name, **kwargs):
     """
@@ -241,6 +269,10 @@ def _load_dataset(dataset_name, **kwargs):
         return load_trivia_qa(**kwargs)
     elif dataset_name == "sciq":
         return {"sciq": load_from_disk(f"{CACHE_DIR}/sciq_converted")}
+    elif dataset_name == "gsm8k":
+        return {"gsm8k": load_dataset("gsm8k", "main", cache_dir=CACHE_DIR)}
+    elif dataset_name == "gsm8k_gens":
+        return load_gsm8k_gens(**kwargs)
     else:
         raise ValueError(f"Dataset {dataset_name} not recognized")
 
@@ -258,35 +290,67 @@ def filter_strings(text, str_remove=None, replacements=None):
     text = text.lstrip()  # Remove leading spaces
     return text
 
-def clean_text(string, dataset, filter, replace,
-               answer_idx=None):
+def clean_text(string, dataset, filter=False, replace=False, answer_idx=None):
+    """
+    Clean text by applying dataset-specific filtering and replacements.
+    
+    Args:
+        string: Input text to clean
+        dataset: Name of dataset (determines which cleaning rules to apply)
+        filter: Whether to filter out specific words/phrases
+        replace: Whether to replace specific words/phrases
+        answer_idx: For multiple choice questions, which answer to select
+    
+    Returns:
+        Cleaned string
+    """
+    # Dataset-specific cleaning configurations
     string_configs = {
         "arithmetic": {
             "filter_words": ['Question:', 'Answer:', 'What is', '?', '\n'],
             "replace_words": {
                 "plus": "+"
             }
+        },
+        "gsm8k_gens": {
+            "filter_words": [],  # Add any GSM8K-specific words to filter
+            "replace_words": {}  # Add any GSM8K-specific replacements
         }
     }
-    if answer_idx is not None:
-        string = string[answer_idx]
 
+    # Handle None or empty input
+    if string is None:
+        return ""
+
+    # For multiple choice datasets, extract specific answer if index provided
+    if dataset in ['mmlu', 'sciq'] and answer_idx is not None:
+        try:
+            string = string[answer_idx]
+        except (IndexError, TypeError):
+            print(f"Warning: Could not index into string with answer_idx {answer_idx}")
+            return string
+
+    # Convert lists/tuples to string by joining with spaces
     if not isinstance(string, str):
-        if isinstance(string, list) or isinstance(string, tuple):
-            string = ' '.join(string)
+        if isinstance(string, (list, tuple)):
+            string = ' '.join(map(str, string))
+        else:
+            string = str(string)
 
-    if filter:
+    # Apply dataset-specific filtering if enabled
+    if filter and dataset in string_configs:
         filter_words = string_configs[dataset]["filter_words"]
-        for s in filter_words:
-            string = string.replace(s, "")
-    
-    if replace:
+        for word in filter_words:
+            string = string.replace(word, "")
+
+    # Apply dataset-specific replacements if enabled
+    if replace and dataset in string_configs:
         replace_words = string_configs[dataset]["replace_words"]
         for old, new in replace_words.items():
             string = string.replace(old, new)
-    
-    # filter any leading spaces
-    string = string.lstrip()
+
+    # Remove leading/trailing whitespace
+    string = string.strip()
 
     return string
 
@@ -631,6 +695,16 @@ class DataConfigs:
             'text_1': 'question',
             'text_2': 'choices',
             'split': 'train',
+        },
+        'gsm8k': {
+            'text_1': 'question',
+            'text_2': 'answer',
+            'split': 'test'
+        },
+        'gsm8k_gens': {
+            'text_1': ['content', 'question'],
+            'text_2': ['content', 'generation'],
+            'answer': ['content', 'answer']
         }
     }
 
@@ -797,7 +871,7 @@ def align_ngram_combinations(ngram_combinations, model, tokenizer, threshold=Non
     model: the pre-trained model to be used for embeddings
     tokenizer: the tokenizer corresponding to the pre-trained model
     threshold: optional score threshold to filter out low-score pairs
-
+i
     Returns:
         A list of tuples with the n-grams and their QA score, optionally filtered by the threshold.
     """
@@ -985,7 +1059,7 @@ class WimbdTasks:
             if align_pairs:
                 print(f"aligning pairs!!")
                 text_combinations = align_ngram_combinations(
-                    text_combinations, self.model, self.tokenizer, threshold=0.85
+                    text_combinations, self.model, self.tokenizer, threshold=0.2
                 )
 
                 
@@ -1104,7 +1178,7 @@ class WimbdAnalysis:
         
     def extract_language_pair(self, filename):
         # Match both 'de-en' and "('de', 'en').pkl" formats
-        match = re.search(r"([a-z]{2})-([a-z]{2})|\('([a-z]{2})', '([a-z]{2})'\)\.pkl", filename)
+        match = re.search(r"([a-z]{2})-([a-z]{2})|\('([a-z]{2})', '([a-z]{2})'\.pkl", filename)
         if match:
             # Check which pattern was matched and extract accordingly
             if match.group(1) and match.group(2):
@@ -1495,7 +1569,7 @@ class WimbdAnalysis:
 
         for dataset in bleu_scores:
             scores = [bleu_scores[dataset][model] for model in models]
-            bar = ax.bar(models, scores, color=color_mapping[dataset], alpha=0.5)
+            bar = ax.bar(models, scores, color=color_mapping[dataset], alpha=0.2)
             bars.append(bar)
 
         ax.set_xlabel('Models')
