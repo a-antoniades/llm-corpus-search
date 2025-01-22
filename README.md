@@ -2,7 +2,10 @@
 ## Incidental Supervision
 
 ![Overview](assets/overview.png)
-*[We constuct an n-gram table for each downstream task by matching semantically simiar n-grams with the pretraining corpus (PILE). We then analyze the LLM predictions and their relationship to the table.]*
+
+<p align="center">
+<b>Overview.</b> We construct an n-gram table for each downstream task by matching semantically similar n-grams with the pretraining corpus (PILE). We then analyze the LLM predictions and their relationship to the table.
+</p>
 
 ### Environment Setup
 
